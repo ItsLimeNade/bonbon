@@ -1,0 +1,20 @@
+[package]
+name = "bonbon"
+version = "0.1.0"
+edition = "2021"
+repository = "https://github.com/ItsLimeNade/bonbon"
+homepage = "https://github.com/ItsLimeNade/bonbon?tab=readme-ov-file"
+authors = ["Limenade"]
+description = "A sweet and simple Rust library for generating static diabetes data visualizations."
+readme = "./README.md"
+license = "MPL-2.0"
+keywords = ["diabetes", "chart", "plot"]
+categories = ["data-structures", "science::bioinformatics", "multimedia::images", "rendering::data-formats", "visualization"]
+
+[dependencies]
+ab_glyph = "0.2.32"
+chrono = "0.4.43"
+image = "0.25.9"
+imageproc = "0.26.0"
+serde = "1.0.228"
+thiserror = "2.0.17"
