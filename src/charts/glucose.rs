@@ -15,10 +15,14 @@ use imageproc::drawing::{draw_filled_circle_mut, draw_line_segment_mut, draw_tex
 pub struct LayoutConfig {
     pub width: u32,
     pub height: u32,
-    pub margin_top: f32,
-    pub margin_bottom: f32,
-    pub margin_left: f32,
-    pub margin_right: f32,
+    /// If None, defaults to 80.0 * scale
+    pub margin_top: Option<f32>,
+    /// If None, defaults to 100.0 * scale
+    pub margin_bottom: Option<f32>,
+    /// If None, defaults to 120.0 * scale
+    pub margin_left: Option<f32>,
+    /// If None, defaults to 60.0 * scale
+    pub margin_right: Option<f32>,
 }
 
 impl Default for LayoutConfig {
@@ -26,10 +30,10 @@ impl Default for LayoutConfig {
         Self {
             width: 1200,
             height: 800,
-            margin_top: 80.0,
-            margin_bottom: 100.0,
-            margin_left: 120.0,
-            margin_right: 60.0,
+            margin_top: None,
+            margin_bottom: None,
+            margin_left: None,
+            margin_right: None,
         }
     }
 }
@@ -198,6 +202,11 @@ impl<'a> GlucoseGraphBuilder<'a> {
         let scale_y = self.layout.height as f32 / base_height;
         let s = scale_x.min(scale_y).max(0.5);
 
+        let m_top = self.layout.margin_top.unwrap_or(80.0 * s);
+        let m_bottom = self.layout.margin_bottom.unwrap_or(100.0 * s);
+        let m_left = self.layout.margin_left.unwrap_or(120.0 * s);
+        let m_right = self.layout.margin_right.unwrap_or(60.0 * s);
+
         let font_base_inc = 1.0;
         let radius_base_inc = 1.0;
 
@@ -206,7 +215,8 @@ impl<'a> GlucoseGraphBuilder<'a> {
         let font_size_xs = (20.0 + font_base_inc) * s;
         let font_size_ctx = (26.0 + font_base_inc) * s;
 
-        let grid_width = (6.0 * s) as i32;
+        let grid_dash = (6.0 * s) as i32;
+        let grid_thickness = (1.0 * s).ceil() as i32;
         let axis_thickness = (2.0 * s).ceil() as i32;
 
         let base_point_radius = if self.entries.len() > 100 { 4.0 } else { 6.0 };
@@ -228,8 +238,8 @@ impl<'a> GlucoseGraphBuilder<'a> {
             reserved_zones.push((x, y, x + w, y + h));
         };
 
-        let mut sorted_entries = self.entries.clone();
-        sorted_entries.sort_by_key(|e| e.date);
+        let mut sorted_entries = self.entries;
+        sorted_entries.sort_unstable_by_key(|e| e.date);
 
         let (start_time, end_time) = if let Some(duration) = self.fixed_duration {
             let now = Utc::now();
@@ -260,30 +270,26 @@ impl<'a> GlucoseGraphBuilder<'a> {
 
         let time_span_secs = (end_time - start_time).num_seconds().max(1) as f32;
 
-        let visible_entries: Vec<&GraphEntry> = sorted_entries
-            .iter()
-            .filter(|e| e.date >= start_time && e.date <= end_time)
-            .collect();
+        let start_idx = sorted_entries.partition_point(|e| e.date < start_time);
+        let end_idx = sorted_entries.partition_point(|e| e.date <= end_time);
+        let visible_entries = &sorted_entries[start_idx..end_idx];
 
         let (y_min, y_max) = match self.scaling {
             GraphScaling::Static { min, max } => (min, max),
             GraphScaling::Dynamic {
                 clamp_min,
                 clamp_max,
-                default_max,
                 default_min,
+                default_max,
             } => {
                 if visible_entries.is_empty() {
                     (clamp_min, clamp_max)
                 } else {
-                    let max_sgv = visible_entries
+                    let (min_sgv, max_sgv) = visible_entries
                         .iter()
-                        .map(|e| e.sgv)
-                        .fold(0.0f32, |a, b| a.max(b));
-                    let min_sgv = visible_entries
-                        .iter()
-                        .map(|e| e.sgv)
-                        .fold(400.0f32, |a, b| a.min(b));
+                        .fold((f32::MAX, f32::MIN), |(min, max), e| {
+                            (min.min(e.sgv), max.max(e.sgv))
+                        });
 
                     let calc_max = ((max_sgv + 20.0) / 10.0).ceil() * 10.0;
                     let calc_min = ((min_sgv - 20.0) / 10.0).floor() * 10.0;
@@ -296,10 +302,10 @@ impl<'a> GlucoseGraphBuilder<'a> {
             }
         };
 
-        let plot_w = self.layout.width as f32 - self.layout.margin_left - self.layout.margin_right;
-        let plot_h = self.layout.height as f32 - self.layout.margin_top - self.layout.margin_bottom;
-        let plot_top = self.layout.margin_top;
-        let plot_left = self.layout.margin_left;
+        let plot_w = self.layout.width as f32 - m_left - m_right;
+        let plot_h = self.layout.height as f32 - m_top - m_bottom;
+        let plot_top = m_top;
+        let plot_left = m_left;
         let plot_bottom = plot_top + plot_h;
         let plot_right = plot_left + plot_w;
 
@@ -337,6 +343,7 @@ impl<'a> GlucoseGraphBuilder<'a> {
             high_col,
             (10.0 * s) as i32,
             (10.0 * s) as i32,
+            grid_thickness,
         );
         draw_dashed_horizontal_line(
             &mut img,
@@ -346,61 +353,63 @@ impl<'a> GlucoseGraphBuilder<'a> {
             low_col,
             (10.0 * s) as i32,
             (10.0 * s) as i32,
+            grid_thickness,
         );
 
-        let draw_thick_vertical = |img: &mut RgbaImage, x: f32, color: Rgba<u8>| {
-            let thickness = (3.0 * s) as i32;
-            for i in 0..thickness {
-                let offset = x + i as f32 - (thickness as f32 / 2.0);
-                draw_line_segment_mut(img, (offset, plot_top), (offset, plot_bottom), color);
+        {
+            let local_start = start_time.with_timezone(&self.timezone);
+            let local_end = end_time.with_timezone(&self.timezone);
+
+            let mut pointer = local_start
+                .date_naive()
+                .and_hms_opt(0, 0, 0)
+                .unwrap()
+                .and_local_timezone(self.timezone)
+                .unwrap();
+            if pointer < local_start {
+                pointer = pointer + Duration::days(1);
             }
-        };
+
+            let separator_thickness = (grid_thickness as f32 * 1.5).ceil() as i32 + 1;
+
+            while pointer <= local_end {
+                let x = project_x(pointer.with_timezone(&Utc));
+                if x >= plot_left && x <= plot_right {
+                    draw_dashed_vertical_line(
+                        &mut img,
+                        x,
+                        plot_top,
+                        plot_bottom,
+                        self.theme.axis_lines,
+                        grid_dash,
+                        grid_dash,
+                        separator_thickness,
+                    );
+
+                    let date_str = pointer.format("%d/%m").to_string();
+                    let dim = text_dimensions(&date_str, font_size_sm, &font);
+                    let tx = (x + 5.0 * s) as i32;
+                    let ty = (plot_top + 5.0 * s) as i32;
+
+                    draw_text_mut(
+                        &mut img,
+                        self.theme.text_secondary,
+                        tx,
+                        ty,
+                        PxScale::from(font_size_sm),
+                        &font,
+                        &date_str,
+                    );
+                    add_zone(tx, ty, dim.0 as i32, dim.1 as i32);
+                }
+                pointer = pointer + Duration::days(1);
+            }
+        }
 
         match self.time_axis_mode {
-            TimeAxisMode::Simple => {
-                let mut current_day = start_time.with_timezone(&self.timezone).date_naive();
-                let mut pointer = start_time;
-                let step = if time_span_secs > 86400.0 * 2.0 {
-                    Duration::hours(4)
-                } else {
-                    Duration::hours(1)
-                };
-
-                let remainder = pointer.timestamp() % 3600;
-                if remainder != 0 {
-                    pointer = pointer + Duration::seconds(3600 - remainder);
-                }
-
-                while pointer <= end_time {
-                    let local_date = pointer.with_timezone(&self.timezone).date_naive();
-                    let x = project_x(pointer);
-                    if x >= plot_left && x <= plot_left + plot_w {
-                        if local_date != current_day {
-                            draw_thick_vertical(&mut img, x, self.theme.axis_lines);
-                            let date_str = local_date.format("%d %b").to_string();
-                            let date_dim = text_dimensions(&date_str, font_size_sm, &font);
-                            let tx = (x + 5.0 * s) as i32;
-                            let ty = (plot_top + 10.0 * s) as i32;
-
-                            draw_text_mut(
-                                &mut img,
-                                self.theme.text_primary,
-                                tx,
-                                ty,
-                                PxScale::from(font_size_sm),
-                                &font,
-                                &date_str,
-                            );
-                            add_zone(tx, ty, date_dim.0 as i32, date_dim.1 as i32);
-                            current_day = local_date;
-                        }
-                    }
-                    pointer += step;
-                }
-            }
+            TimeAxisMode::Simple => {}
             TimeAxisMode::EquallyDistributed { count } => {
                 let step_secs = time_span_secs / (count as f32);
-                let mut current_day = start_time.with_timezone(&self.timezone).date_naive();
 
                 for i in 0..=count {
                     let offset = i as f32 * step_secs;
@@ -412,41 +421,20 @@ impl<'a> GlucoseGraphBuilder<'a> {
                     }
 
                     let local_time = tick_time.with_timezone(&self.timezone);
-                    let local_date = local_time.date_naive();
 
-                    if local_date != current_day {
-                        draw_thick_vertical(&mut img, x, self.theme.axis_lines);
-                        current_day = local_date;
-                        let date_str = local_date.format("%d %b").to_string();
-                        let date_dim = text_dimensions(&date_str, font_size_sm, &font);
-                        let tx = (x + 5.0 * s) as i32;
-                        let ty = (plot_top + 10.0 * s) as i32;
-
-                        draw_text_mut(
-                            &mut img,
-                            self.theme.text_primary,
-                            tx,
-                            ty,
-                            PxScale::from(font_size_sm),
-                            &font,
-                            &date_str,
-                        );
-                        add_zone(tx, ty, date_dim.0 as i32, date_dim.1 as i32);
-                    } else {
-                        draw_dashed_vertical_line(
-                            &mut img,
-                            x,
-                            plot_top,
-                            plot_bottom,
-                            self.theme.grid_major,
-                            grid_width,
-                            grid_width,
-                        );
-                    }
+                    draw_dashed_vertical_line(
+                        &mut img,
+                        x,
+                        plot_top,
+                        plot_bottom,
+                        self.theme.grid_major,
+                        grid_dash,
+                        grid_dash,
+                        grid_thickness,
+                    );
 
                     let time_str = local_time.format("%H:%M").to_string();
                     let dim_time = text_dimensions(&time_str, font_size_sm, &font);
-
                     let mut tx = (x - dim_time.0 / 2.0) as i32;
                     let min_tx = plot_left as i32;
                     let max_tx = (plot_right - dim_time.0) as i32;
@@ -509,7 +497,7 @@ impl<'a> GlucoseGraphBuilder<'a> {
         }
 
         let unit_anchor_x = plot_left - (10.0 * s);
-        let unit_start_y = plot_bottom + (font_size_md / 2.0) + (25.0 * s);
+        let unit_start_y = plot_bottom + (font_size_md / 2.0) + (15.0 * s);
 
         match self.unit_display {
             UnitDisplay::MgDl => {
@@ -552,7 +540,6 @@ impl<'a> GlucoseGraphBuilder<'a> {
                 let dim1 = text_dimensions(u1, font_size_sm, &font);
                 let dim2 = text_dimensions(u2, font_size_xs, &font);
 
-                // Primary
                 let tx1 = (unit_anchor_x - dim1.0) as i32;
                 let ty1 = unit_start_y as i32;
                 draw_text_mut(
@@ -566,7 +553,6 @@ impl<'a> GlucoseGraphBuilder<'a> {
                 );
                 add_zone(tx1, ty1, dim1.0 as i32, dim1.1 as i32);
 
-                // Secondary
                 let tx2 = (unit_anchor_x - dim2.0) as i32;
                 let ty2 = (unit_start_y + dim1.1 + 2.0 * s) as i32;
                 draw_text_mut(
@@ -912,7 +898,7 @@ impl<'a> GlucoseGraphBuilder<'a> {
             }
         }
 
-        for e in &visible_entries {
+        for e in visible_entries {
             let x = project_x(e.date);
             let y = project_y(e.sgv);
             let color = if e.sgv > self.target_high {
