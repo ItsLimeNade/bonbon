@@ -93,6 +93,7 @@ impl<'a> GlucoseGraphBuilder<'a> {
         self.entries.extend(entries.into_iter().map(|e| e.into()));
         self
     }
+
     //? Since we have "add_treatments" should I even keep this lol
     pub fn with_treatments<I>(mut self, treatments: I) -> Self
     where
@@ -614,6 +615,9 @@ impl<'a> GlucoseGraphBuilder<'a> {
                 let dark_insulin = darken_color(self.theme.insulin, 0.6);
                 let dark_carbs = darken_color(self.theme.carbs, 0.6);
 
+                let mut text_regions: Vec<(i32, i32, i32, i32)> = Vec::new();
+                let margin_overlap = 4.0 * s;
+
                 for t in &visible_treatments {
                     let x = project_x(t.date);
                     let closest = sorted_entries
@@ -651,15 +655,42 @@ impl<'a> GlucoseGraphBuilder<'a> {
                         if ins > self.microbolus_threshold {
                             let text = format!("{:.1}u", ins);
                             let dim = text_dimensions(&text, font_size_ctx, &font);
+                            let w = dim.0 as i32;
+                            let h = dim.1 as i32;
+                            let text_x = (x - dim.0 / 2.0) as i32;
+                            let mut text_y = (y + size + text_distance) as i32;
+
+                            let mut attempts = 0;
+                            while attempts < 10 {
+                                let mut collision = false;
+                                for r in &text_regions {
+                                    if text_x < r.2
+                                        && text_x + w > r.0
+                                        && text_y < r.3
+                                        && text_y + h > r.1
+                                    {
+                                        collision = true;
+                                        break;
+                                    }
+                                }
+                                if collision {
+                                    text_y += (h as f32 + margin_overlap) as i32;
+                                    attempts += 1;
+                                } else {
+                                    break;
+                                }
+                            }
+
                             draw_text_mut(
                                 &mut img,
                                 self.theme.text_secondary,
-                                (x - dim.0 / 2.0) as i32,
-                                (y + size + text_distance) as i32,
+                                text_x,
+                                text_y,
                                 text_scale,
                                 &font,
                                 &text,
                             );
+                            text_regions.push((text_x, text_y, text_x + w, text_y + h));
                         }
                     }
 
@@ -679,15 +710,42 @@ impl<'a> GlucoseGraphBuilder<'a> {
 
                         let text = format!("{:.0}g", carbs);
                         let dim = text_dimensions(&text, font_size_ctx, &font);
+                        let w = dim.0 as i32;
+                        let h = dim.1 as i32;
+                        let text_x = (x - dim.0 / 2.0) as i32;
+                        let mut text_y = (y - radius - dim.1 - text_distance) as i32;
+
+                        let mut attempts = 0;
+                        while attempts < 10 {
+                            let mut collision = false;
+                            for r in &text_regions {
+                                if text_x < r.2
+                                    && text_x + w > r.0
+                                    && text_y < r.3
+                                    && text_y + h > r.1
+                                {
+                                    collision = true;
+                                    break;
+                                }
+                            }
+                            if collision {
+                                text_y -= (h as f32 + margin_overlap) as i32;
+                                attempts += 1;
+                            } else {
+                                break;
+                            }
+                        }
+
                         draw_text_mut(
                             &mut img,
                             self.theme.text_secondary,
-                            (x - dim.0 / 2.0) as i32,
-                            (y - radius - dim.1 - text_distance) as i32,
+                            text_x,
+                            text_y,
                             text_scale,
                             &font,
                             &text,
                         );
+                        text_regions.push((text_x, text_y, text_x + w, text_y + h));
                     }
                 }
             }
