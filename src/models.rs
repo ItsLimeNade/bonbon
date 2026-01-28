@@ -42,7 +42,18 @@ pub enum GraphScaling {
     /// Manually set Min and Max (e.g., 40, 400).
     Static { min: f32, max: f32 },
     /// Automatically detected based on data, clamped to specific bounds.
-    Dynamic { clamp_min: f32, clamp_max: f32 },
+    Dynamic {
+        /// The absolute minimum value the graph can show (hard floor).
+        clamp_min: f32,
+        /// The absolute maximum value the graph can show (hard ceiling).
+        clamp_max: f32,
+        /// The default minimum view (e.g., 70). The graph will expand to this
+        /// even if data is tight (e.g., 100-120 becomes 70-120).
+        /// If data goes below this (but above clamp_min), the graph expands further.
+        default_min: f32,
+        /// The default maximum view (e.g., 180).
+        default_max: f32,
+    },
 }
 
 impl Default for GraphScaling {
@@ -50,6 +61,8 @@ impl Default for GraphScaling {
         Self::Dynamic {
             clamp_min: 40.0,
             clamp_max: 400.0,
+            default_min: 60.0,
+            default_max: 200.0,
         }
     }
 }

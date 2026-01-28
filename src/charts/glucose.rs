@@ -198,17 +198,34 @@ impl<'a> GlucoseGraphBuilder<'a> {
         let scale_y = self.layout.height as f32 / base_height;
         let s = scale_x.min(scale_y).max(0.5);
 
-        let font_size_md = 30.0 * s;
-        let font_size_sm = 24.0 * s;
-        let font_size_xs = 20.0 * s;
-        let font_size_ctx = 26.0 * s;
+        let font_base_inc = 1.0;
+        let radius_base_inc = 1.0;
+
+        let font_size_md = (30.0 + font_base_inc) * s;
+        let font_size_sm = (24.0 + font_base_inc) * s;
+        let font_size_xs = (20.0 + font_base_inc) * s;
+        let font_size_ctx = (26.0 + font_base_inc) * s;
 
         let grid_width = (6.0 * s) as i32;
         let axis_thickness = (2.0 * s).ceil() as i32;
-        let point_radius = if self.entries.len() > 100 {
-            4.0 * s
-        } else {
-            6.0 * s
+
+        let base_point_radius = if self.entries.len() > 100 { 4.0 } else { 6.0 };
+        let point_radius = (base_point_radius + radius_base_inc) * s;
+
+        let ins_min_size = 6.0 * s;
+        let ins_max_size = 25.0 * s;
+        let ins_micro_size = 3.5 * s;
+        let ins_base_size = 8.0 * s;
+        let ins_scaling_factor = 2.0 * s;
+
+        let carb_min_size = 8.0 * s;
+        let carb_max_size = 28.0 * s;
+        let carb_base_size = 10.0 * s;
+        let carb_scaling_factor = 0.25 * s;
+
+        let mut reserved_zones: Vec<(i32, i32, i32, i32)> = Vec::new();
+        let mut add_zone = |x: i32, y: i32, w: i32, h: i32| {
+            reserved_zones.push((x, y, x + w, y + h));
         };
 
         let mut sorted_entries = self.entries.clone();
@@ -253,6 +270,8 @@ impl<'a> GlucoseGraphBuilder<'a> {
             GraphScaling::Dynamic {
                 clamp_min,
                 clamp_max,
+                default_max,
+                default_min,
             } => {
                 if visible_entries.is_empty() {
                     (clamp_min, clamp_max)
@@ -265,9 +284,14 @@ impl<'a> GlucoseGraphBuilder<'a> {
                         .iter()
                         .map(|e| e.sgv)
                         .fold(400.0f32, |a, b| a.min(b));
+
                     let calc_max = ((max_sgv + 20.0) / 10.0).ceil() * 10.0;
                     let calc_min = ((min_sgv - 20.0) / 10.0).floor() * 10.0;
-                    (calc_min.max(clamp_min), calc_max.min(clamp_max))
+
+                    let view_min = calc_min.min(default_min);
+                    let view_max = calc_max.max(default_max);
+
+                    (view_min.max(clamp_min), view_max.min(clamp_max))
                 }
             }
         };
@@ -277,6 +301,7 @@ impl<'a> GlucoseGraphBuilder<'a> {
         let plot_top = self.layout.margin_top;
         let plot_left = self.layout.margin_left;
         let plot_bottom = plot_top + plot_h;
+        let plot_right = plot_left + plot_w;
 
         let project_x = |time: chrono::DateTime<Utc>| -> f32 {
             let offset = (time - start_time).num_seconds() as f32;
@@ -353,15 +378,20 @@ impl<'a> GlucoseGraphBuilder<'a> {
                         if local_date != current_day {
                             draw_thick_vertical(&mut img, x, self.theme.axis_lines);
                             let date_str = local_date.format("%d %b").to_string();
+                            let date_dim = text_dimensions(&date_str, font_size_sm, &font);
+                            let tx = (x + 5.0 * s) as i32;
+                            let ty = (plot_top + 10.0 * s) as i32;
+
                             draw_text_mut(
                                 &mut img,
                                 self.theme.text_primary,
-                                (x + 5.0 * s) as i32,
-                                (plot_top + 10.0 * s) as i32,
+                                tx,
+                                ty,
                                 PxScale::from(font_size_sm),
                                 &font,
                                 &date_str,
                             );
+                            add_zone(tx, ty, date_dim.0 as i32, date_dim.1 as i32);
                             current_day = local_date;
                         }
                     }
@@ -388,15 +418,20 @@ impl<'a> GlucoseGraphBuilder<'a> {
                         draw_thick_vertical(&mut img, x, self.theme.axis_lines);
                         current_day = local_date;
                         let date_str = local_date.format("%d %b").to_string();
+                        let date_dim = text_dimensions(&date_str, font_size_sm, &font);
+                        let tx = (x + 5.0 * s) as i32;
+                        let ty = (plot_top + 10.0 * s) as i32;
+
                         draw_text_mut(
                             &mut img,
                             self.theme.text_primary,
-                            (x + 5.0 * s) as i32,
-                            (plot_top + 10.0 * s) as i32,
+                            tx,
+                            ty,
                             PxScale::from(font_size_sm),
                             &font,
                             &date_str,
                         );
+                        add_zone(tx, ty, date_dim.0 as i32, date_dim.1 as i32);
                     } else {
                         draw_dashed_vertical_line(
                             &mut img,
@@ -411,15 +446,24 @@ impl<'a> GlucoseGraphBuilder<'a> {
 
                     let time_str = local_time.format("%H:%M").to_string();
                     let dim_time = text_dimensions(&time_str, font_size_sm, &font);
+
+                    let mut tx = (x - dim_time.0 / 2.0) as i32;
+                    let min_tx = plot_left as i32;
+                    let max_tx = (plot_right - dim_time.0) as i32;
+                    tx = tx.clamp(min_tx, max_tx);
+
+                    let ty = (plot_bottom + 10.0 * s) as i32;
+
                     draw_text_mut(
                         &mut img,
                         self.theme.text_primary,
-                        (x - dim_time.0 / 2.0) as i32,
-                        (plot_bottom + 10.0 * s) as i32,
+                        tx,
+                        ty,
                         PxScale::from(font_size_sm),
                         &font,
                         &time_str,
                     );
+                    add_zone(tx, ty, dim_time.0 as i32, dim_time.1 as i32);
 
                     let diff_secs = (end_time - tick_time).num_seconds();
                     let hours = diff_secs as f32 / 3600.0;
@@ -429,15 +473,21 @@ impl<'a> GlucoseGraphBuilder<'a> {
                         format!("-{:.1}h", hours)
                     };
                     let dim_rel = text_dimensions(&rel_str, font_size_xs, &font);
+                    let mut rx = (x - dim_rel.0 / 2.0) as i32;
+                    let max_rx = (plot_right - dim_rel.0) as i32;
+                    rx = rx.clamp(min_tx, max_rx);
+                    let ry = (plot_bottom + 10.0 * s + dim_time.1 + 4.0 * s) as i32;
+
                     draw_text_mut(
                         &mut img,
                         self.theme.text_dim,
-                        (x - dim_rel.0 / 2.0) as i32,
-                        (plot_bottom + 10.0 * s + dim_time.1 + 4.0 * s) as i32,
+                        rx,
+                        ry,
                         PxScale::from(font_size_xs),
                         &font,
                         &rel_str,
                     );
+                    add_zone(rx, ry, dim_rel.0 as i32, dim_rel.1 as i32);
                 }
             }
         }
@@ -458,33 +508,41 @@ impl<'a> GlucoseGraphBuilder<'a> {
             );
         }
 
-        let unit_label_y = plot_top - (50.0 * s);
+        let unit_anchor_x = plot_left - (10.0 * s);
+        let unit_start_y = plot_bottom + (font_size_md / 2.0) + (25.0 * s);
+
         match self.unit_display {
             UnitDisplay::MgDl => {
                 let text = "mg/dL";
                 let dim = text_dimensions(text, font_size_sm, &font);
+                let tx = (unit_anchor_x - dim.0) as i32;
+                let ty = unit_start_y as i32;
                 draw_text_mut(
                     &mut img,
                     self.theme.text_primary,
-                    (plot_left - dim.0 - 5.0 * s) as i32,
-                    unit_label_y as i32,
+                    tx,
+                    ty,
                     PxScale::from(font_size_sm),
                     &font,
                     text,
                 );
+                add_zone(tx, ty, dim.0 as i32, dim.1 as i32);
             }
             UnitDisplay::MmolL => {
                 let text = "mmol/L";
                 let dim = text_dimensions(text, font_size_sm, &font);
+                let tx = (unit_anchor_x - dim.0) as i32;
+                let ty = unit_start_y as i32;
                 draw_text_mut(
                     &mut img,
                     self.theme.text_primary,
-                    (plot_left - dim.0 - 5.0 * s) as i32,
-                    unit_label_y as i32,
+                    tx,
+                    ty,
                     PxScale::from(font_size_sm),
                     &font,
                     text,
                 );
+                add_zone(tx, ty, dim.0 as i32, dim.1 as i32);
             }
             UnitDisplay::Dual { primary } => {
                 let (u1, u2) = match primary {
@@ -493,24 +551,34 @@ impl<'a> GlucoseGraphBuilder<'a> {
                 };
                 let dim1 = text_dimensions(u1, font_size_sm, &font);
                 let dim2 = text_dimensions(u2, font_size_xs, &font);
+
+                // Primary
+                let tx1 = (unit_anchor_x - dim1.0) as i32;
+                let ty1 = unit_start_y as i32;
                 draw_text_mut(
                     &mut img,
                     self.theme.text_primary,
-                    (plot_left - dim1.0 - 5.0 * s) as i32,
-                    unit_label_y as i32,
+                    tx1,
+                    ty1,
                     PxScale::from(font_size_sm),
                     &font,
                     u1,
                 );
+                add_zone(tx1, ty1, dim1.0 as i32, dim1.1 as i32);
+
+                // Secondary
+                let tx2 = (unit_anchor_x - dim2.0) as i32;
+                let ty2 = (unit_start_y + dim1.1 + 2.0 * s) as i32;
                 draw_text_mut(
                     &mut img,
                     self.theme.text_dim,
-                    (plot_left - dim2.0 - 5.0 * s) as i32,
-                    (unit_label_y + dim1.1 + 5.0 * s) as i32,
+                    tx2,
+                    ty2,
                     PxScale::from(font_size_xs),
                     &font,
                     u2,
                 );
+                add_zone(tx2, ty2, dim2.0 as i32, dim2.1 as i32);
             }
         }
 
@@ -531,23 +599,31 @@ impl<'a> GlucoseGraphBuilder<'a> {
                     }
                 },
             };
+
             let main_dim = text_dimensions(&main_text, font_size_md, &font);
+            let main_tx = (plot_left - main_dim.0 - 10.0 * s) as i32;
+            let main_ty = (y_pos - main_dim.1 / 2.0) as i32;
+
             draw_text_mut(
                 &mut img,
                 self.theme.text_primary,
-                (plot_left - main_dim.0 - 10.0 * s) as i32,
-                (y_pos - main_dim.1 / 2.0) as i32,
+                main_tx,
+                main_ty,
                 PxScale::from(font_size_md),
                 &font,
                 &main_text,
             );
+
             if let Some(sub) = sub_text {
                 let sub_dim = text_dimensions(&sub, font_size_xs, &font);
+                let sub_tx = (plot_left - sub_dim.0 - 10.0 * s) as i32;
+                let sub_ty = (y_pos + main_dim.1 / 2.0) as i32;
+
                 draw_text_mut(
                     &mut img,
                     self.theme.text_dim,
-                    (plot_left - sub_dim.0 - 10.0 * s) as i32,
-                    (y_pos + main_dim.1 / 2.0) as i32,
+                    sub_tx,
+                    sub_ty,
                     PxScale::from(font_size_xs),
                     &font,
                     &sub,
@@ -630,15 +706,11 @@ impl<'a> GlucoseGraphBuilder<'a> {
                     };
 
                     if let Some(ins) = t.insulin {
-                        let min_size = 6.0 * s;
-                        let max_size = 25.0 * s;
-                        let micro_size = 3.5 * s;
-
                         let size = if ins <= self.microbolus_threshold {
-                            micro_size
+                            ins_micro_size
                         } else {
-                            let calculated = (8.0 * s) + (ins * 2.0 * s);
-                            calculated.clamp(min_size, max_size) * icon_scale
+                            let calculated = ins_base_size + (ins * ins_scaling_factor);
+                            calculated.clamp(ins_min_size, ins_max_size) * icon_scale
                         };
 
                         let y = base_y + insulin_offset_ctx;
@@ -664,10 +736,7 @@ impl<'a> GlucoseGraphBuilder<'a> {
                             while attempts < 10 {
                                 let mut collision = false;
                                 for r in &text_regions {
-                                    if text_x < r.2
-                                        && text_x + w > r.0
-                                        && text_y < r.3
-                                        && text_y + h > r.1
+                                    if rects_intersect((text_x, text_y, text_x + w, text_y + h), *r)
                                     {
                                         collision = true;
                                         break;
@@ -696,7 +765,9 @@ impl<'a> GlucoseGraphBuilder<'a> {
 
                     if let Some(carbs) = t.carbs {
                         let y = base_y - carbs_offset_ctx;
-                        let radius = 10.0 * s * icon_scale;
+
+                        let calc_carb_r = carb_base_size + (carbs * carb_scaling_factor);
+                        let radius = calc_carb_r.clamp(carb_min_size, carb_max_size) * icon_scale;
 
                         draw_smart_circle(
                             &mut img,
@@ -719,11 +790,7 @@ impl<'a> GlucoseGraphBuilder<'a> {
                         while attempts < 10 {
                             let mut collision = false;
                             for r in &text_regions {
-                                if text_x < r.2
-                                    && text_x + w > r.0
-                                    && text_y < r.3
-                                    && text_y + h > r.1
-                                {
+                                if rects_intersect((text_x, text_y, text_x + w, text_y + h), *r) {
                                     collision = true;
                                     break;
                                 }
@@ -954,4 +1021,8 @@ fn draw_smart_triangle(
             }
         }
     }
+}
+
+fn rects_intersect(a: (i32, i32, i32, i32), b: (i32, i32, i32, i32)) -> bool {
+    a.0 < b.2 && a.2 > b.0 && a.1 < b.3 && a.3 > b.1
 }
