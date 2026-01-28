@@ -81,6 +81,18 @@ impl<'a> GlucoseGraphBuilder<'a> {
         self
     }
 
+    /// Adds a list of entries to the graph, appending them to any existing ones.
+    ///
+    /// This method is generic: it accepts any iterator of items that can be converted
+    /// into a `GraphEntry`.
+    pub fn add_entries<I>(mut self, entries: I) -> Self
+    where
+        I: IntoIterator,
+        I::Item: Into<GraphEntry>,
+    {
+        self.entries.extend(entries.into_iter().map(|e| e.into()));
+        self
+    }
     //? Since we have "add_treatments" should I even keep this lol
     pub fn with_treatments<I>(mut self, treatments: I) -> Self
     where
