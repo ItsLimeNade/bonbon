@@ -1,9 +1,8 @@
-use serde::{Deserialize, Deserializer};
 use image::Rgba;
-use std::path::Path;
+use serde::{Deserialize, Deserializer};
 use std::fs::File;
 use std::io::Read;
-
+use std::path::Path;
 
 #[derive(Clone, Debug, Deserialize)]
 pub struct Theme {
@@ -40,7 +39,7 @@ pub struct Theme {
 
 impl Theme {
     pub fn dark() -> Self {
-        let json = include_str!("./themes/beetroot_dark.json"); 
+        let json = include_str!("./themes/beetroot_dark.json");
         serde_json::from_str(json).expect("Built-in dark theme is invalid JSON")
     }
 
@@ -54,7 +53,7 @@ impl Theme {
         let mut file = File::open(path)?;
         let mut contents = String::new();
         file.read_to_string(&mut contents)?;
-        
+
         let theme: Theme = serde_json::from_str(&contents)?;
         Ok(theme)
     }
@@ -70,7 +69,7 @@ where
 
 fn parse_hex_color(hex: &str) -> Result<Rgba<u8>, String> {
     let hex = hex.trim_start_matches('#');
-    
+
     match hex.len() {
         6 => {
             let r = u8::from_str_radix(&hex[0..2], 16).map_err(|_| "Invalid Red")?;
@@ -85,6 +84,9 @@ fn parse_hex_color(hex: &str) -> Result<Rgba<u8>, String> {
             let a = u8::from_str_radix(&hex[6..8], 16).map_err(|_| "Invalid Alpha")?;
             Ok(Rgba([r, g, b, a]))
         }
-        _ => Err(format!("Invalid hex length: {}. Expected 6 (RGB) or 8 (RGBA)", hex.len())),
+        _ => Err(format!(
+            "Invalid hex length: {}. Expected 6 (RGB) or 8 (RGBA)",
+            hex.len()
+        )),
     }
 }
