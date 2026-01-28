@@ -3,9 +3,7 @@ use crate::models::{
     UnitPreference,
 };
 use crate::theme::Theme;
-use crate::utils::drawing::{
-    draw_dashed_horizontal_line, draw_dashed_vertical_line
-};
+use crate::utils::drawing::{draw_dashed_horizontal_line, draw_dashed_vertical_line};
 use ab_glyph::{FontRef, PxScale};
 use chrono::{Duration, Utc};
 use chrono_tz::Tz;
@@ -74,13 +72,43 @@ impl<'a> GlucoseGraphBuilder<'a> {
         }
     }
 
-    pub fn with_entries(mut self, entries: Vec<GraphEntry>) -> Self {
-        self.entries = entries;
+    pub fn with_entries<I>(mut self, entries: I) -> Self
+    where
+        I: IntoIterator,
+        I::Item: Into<GraphEntry>,
+    {
+        self.entries = entries.into_iter().map(|e| e.into()).collect();
         self
     }
 
-    pub fn with_treatments(mut self, treatments: Vec<GraphTreatment>) -> Self {
-        self.treatments = treatments;
+    //? Since we have "add_treatments" should I even keep this lol
+    pub fn with_treatments<I>(mut self, treatments: I) -> Self
+    where
+        I: IntoIterator,
+        I::Item: TryInto<GraphTreatment>,
+    {
+        self.treatments = treatments
+            .into_iter()
+            .filter_map(|t| t.try_into().ok())
+            .collect();
+        self
+    }
+
+    /// Adds a list of treatments to the graph, appending them to any existing ones.
+    ///
+    /// This method is generic: it accepts ANY iterator of items that can be converted
+    /// into a `GraphTreatment`. This works for:
+    /// - `Vec<GraphTreatment>` (Native)
+    /// - `Vec<Treatment>` (Cinnamon, via TryFrom)
+    /// - `Vec<MbgEntry>` (Cinnamon, via From -> TryInto)
+    pub fn add_treatments<I, T>(mut self, new_treatments: I) -> Self
+    where
+        I: IntoIterator<Item = T>,
+        T: TryInto<GraphTreatment>,
+    {
+        self.treatments
+            .extend(new_treatments.into_iter().filter_map(|t| t.try_into().ok()));
+
         self
     }
 
@@ -765,7 +793,6 @@ impl<'a> GlucoseGraphBuilder<'a> {
     }
 }
 
-
 fn text_dimensions(text: &str, size: f32, _font: &FontRef) -> (f32, f32) {
     let width = text.len() as f32 * (size * 0.6);
     (width, size)
@@ -822,7 +849,7 @@ fn draw_smart_triangle(
 ) {
     let x = center.0 as f32;
     let y = center.1 as f32;
-    
+
     let p1 = ((x - size) as i32, (y - size) as i32);
     let p2 = ((x + size) as i32, (y - size) as i32);
     let p3 = (x as i32, (y + size) as i32);

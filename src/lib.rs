@@ -9,6 +9,11 @@ pub mod charts {
 
 pub mod prelude {
     pub use crate::charts::glucose::{GlucoseGraphBuilder, LayoutConfig};
+    #[cfg(feature = "cinnamon")]
+    pub use crate::integrations::*;
     pub use crate::models::*;
     pub use crate::theme::Theme;
 }
+
+#[cfg(feature = "cinnamon")]
+pub mod integrations;
