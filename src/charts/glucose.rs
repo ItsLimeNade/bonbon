@@ -3,8 +3,10 @@ use crate::models::{
     UnitPreference,
 };
 use crate::theme::Theme;
-use crate::utils::drawing::{draw_dashed_horizontal_line, draw_dashed_vertical_line, draw_smart_circle, draw_smart_triangle};
 use crate::utils::color::darken_color;
+use crate::utils::drawing::{
+    draw_dashed_horizontal_line, draw_dashed_vertical_line, draw_smart_circle, draw_smart_triangle,
+};
 
 use ab_glyph::{FontRef, PxScale};
 use chrono::{Duration, Utc};

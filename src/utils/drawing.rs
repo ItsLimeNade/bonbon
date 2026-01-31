@@ -73,6 +73,7 @@ pub fn draw_dashed_horizontal_line(
 }
 
 /// Draws an insulin triangle.
+#[allow(unused)]
 pub fn draw_insulin_triangle(img: &mut RgbaImage, x: f32, y: f32, color: Rgba<u8>, size: f32) {
     let points = vec![
         Point::new((x - size) as i32, (y - size) as i32),
@@ -83,6 +84,7 @@ pub fn draw_insulin_triangle(img: &mut RgbaImage, x: f32, y: f32, color: Rgba<u8
 }
 
 /// Draws a carb circle.
+#[allow(unused)]
 pub fn draw_carb_circle(img: &mut RgbaImage, x: f32, y: f32, radius: i32, color: Rgba<u8>) {
     draw_filled_circle_mut(img, (x as i32, y as i32), radius, color);
 }
