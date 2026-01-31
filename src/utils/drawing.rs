@@ -168,3 +168,33 @@ pub fn draw_smart_triangle(
         }
     }
 }
+
+pub fn draw_fast_rect(img: &mut RgbaImage, x: i32, y: i32, w: u32, h: u32, color: Rgba<u8>) {
+    let (img_w, img_h) = img.dimensions();
+
+    let x0 = x.max(0) as u32;
+    let y0 = y.max(0) as u32;
+    let x1 = (x + w as i32).min(img_w as i32) as u32;
+    let y1 = (y + h as i32).min(img_h as i32) as u32;
+
+    if x0 >= x1 || y0 >= y1 {
+        return;
+    }
+
+    let rect_width = (x1 - x0) as usize;
+    let color_pixel = color.0;
+
+    let row_fill: Vec<u8> = color_pixel
+        .iter()
+        .copied()
+        .cycle()
+        .take(rect_width * 4)
+        .collect();
+
+    for row_y in y0..y1 {
+        let start_idx = (row_y * img_w + x0) as usize * 4;
+        let end_idx = start_idx + (rect_width * 4);
+
+        img.as_mut()[start_idx..end_idx].copy_from_slice(&row_fill);
+    }
+}

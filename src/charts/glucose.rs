@@ -5,9 +5,10 @@ use crate::models::{
 use crate::theme::Theme;
 use crate::utils::color::darken_color;
 use crate::utils::drawing::{
-    draw_dashed_horizontal_line, draw_dashed_vertical_line, draw_smart_circle, draw_smart_triangle,
+    draw_dashed_horizontal_line, draw_dashed_vertical_line, draw_smart_circle, draw_smart_triangle, draw_fast_rect
 };
 
+use rayon::prelude::*;
 use ab_glyph::{FontRef, PxScale};
 use chrono::{Duration, Utc};
 use chrono_tz::Tz;
@@ -622,37 +623,28 @@ impl<'a> GlucoseGraphBuilder<'a> {
 
     /// Private helper function that draws the... you guessed it! Borders of the axis lines!
     fn draw_axis_border(&self, img: &mut RgbaImage, ctx: &RenderContext) {
-        let axis_thickness = (2.0 * ctx.viewport.s).ceil() as i32;
-        for i in 0..axis_thickness {
-            let offset = i as f32;
-            let overlap_offset: f32 = 3.0 * axis_thickness as f32;
-            // Y axis
-            draw_line_segment_mut(
-                img,
-                (
-                    ctx.viewport.plot_left - offset - overlap_offset,
-                    ctx.viewport.plot_top - overlap_offset,
-                ),
-                (
-                    ctx.viewport.plot_left - offset - overlap_offset,
-                    ctx.viewport.plot_bottom + overlap_offset,
-                ),
-                self.theme.axis_lines,
-            );
-            // X axis
-            draw_line_segment_mut(
-                img,
-                (
-                    ctx.viewport.plot_left - overlap_offset,
-                    ctx.viewport.plot_bottom + offset + overlap_offset,
-                ),
-                (
-                    ctx.viewport.plot_right + overlap_offset,
-                    ctx.viewport.plot_bottom + offset + overlap_offset,
-                ),
-                self.theme.axis_lines,
-            );
-        }
+        let axis_thickness = (2.0 * ctx.viewport.s).ceil() as u32;
+        let overlap_offset = 3.0 * axis_thickness as f32;
+
+        //  Y Axis 
+        draw_fast_rect(
+            img,
+            (ctx.viewport.plot_left - overlap_offset - axis_thickness as f32) as i32,
+            (ctx.viewport.plot_top - overlap_offset) as i32,
+            axis_thickness,
+            (ctx.viewport.plot_h + (2.0 * overlap_offset)) as u32,
+            self.theme.axis_lines,
+        );
+
+        // X Axis
+        draw_fast_rect(
+            img,
+            (ctx.viewport.plot_left - overlap_offset) as i32, 
+            (ctx.viewport.plot_bottom + overlap_offset) as i32,
+            (ctx.viewport.plot_w + (2.0 * overlap_offset)) as u32,
+            axis_thickness,
+            self.theme.axis_lines,
+        );
     }
 
     fn draw_labels_and_units(&self, img: &mut RgbaImage, ctx: &RenderContext) {
