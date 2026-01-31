@@ -89,6 +89,7 @@ pub struct GlucoseGraphBuilder<'a> {
     treatment_mode: TreatmentDisplayMode,
     time_axis_mode: TimeAxisMode,
     fixed_duration: Option<Duration>,
+    custom_start: Option<chrono::DateTime<Utc>>,
     timezone: Tz,
     layout: LayoutConfig,
     theme: Theme,
@@ -108,6 +109,7 @@ impl<'a> GlucoseGraphBuilder<'a> {
             fixed_duration: None,
             treatment_mode: TreatmentDisplayMode::default(),
             time_axis_mode: TimeAxisMode::default(),
+            custom_start: None,
             timezone: chrono_tz::UTC,
             layout: LayoutConfig::default(),
             theme,
@@ -238,9 +240,19 @@ impl<'a> GlucoseGraphBuilder<'a> {
     }
 
     /// Forces the graph to display a specific time range (e.g., 24 hours) ending at "now" (or the latest entry).
+    /// 
     /// If set, this overrides the dynamic auto-scaling of the time axis.
     pub fn with_fixed_duration(mut self, duration: Duration) -> Self {
         self.fixed_duration = Some(duration);
+        self
+    }
+
+    /// Sets the specific start time for the graph window.
+    ///
+    /// When used with `with_fixed_duration`, this creates a precise window: [start, start + duration].
+    /// When used without a duration, it shows data from `date` to the last available entry.
+    pub fn start_at(mut self, date: chrono::DateTime<Utc>) -> Self {
+        self.custom_start = Some(date);
         self
     }
 
@@ -337,16 +349,31 @@ impl<'a> GlucoseGraphBuilder<'a> {
 
     /// Private helper function used to find the graph's viewport data time range.
     fn determine_time_range(&self) -> Result<TimeRange, Box<dyn std::error::Error>> {
+        // Set explicite start date mode
+        if let Some(start) = self.custom_start {
+            let end = if let Some(duration) = self.fixed_duration {
+                // Window = [Start, Start + Duration]
+                start + duration
+            } else {
+                // Window = [Start, End of Data]
+                if self.entries.is_empty() {
+                    return Err("No entries provided and no fixed duration set with custom start".into());
+                }
+                self.entries.last().unwrap().date
+            };
+            return Ok((start, end));
+        }
+
+        // Fixed Duration Mode
+        // Auto-calculates the end anchor based on data recency
         if let Some(duration) = self.fixed_duration {
             let now = Utc::now();
-            // anchor represents where the values are supposed to be located in time.
-            // If there's no entries it defaults to now. If there's an entry it takes the last one
-            // (aka the latest one, since entries is sorted from ascending date order at this point)
-            // Ok so... While writing this comment I realized this function needs reworking as it has some issues.
             let anchor = if self.entries.is_empty() {
                 now
             } else {
                 let last_entry = self.entries.last().unwrap().date;
+                // ! Questionable practice, should I delete?
+                // If the data is older than 24h, anchor to the data instead of "now"
                 if (now - last_entry).num_hours() > 24 {
                     last_entry
                 } else {
@@ -354,9 +381,12 @@ impl<'a> GlucoseGraphBuilder<'a> {
                 }
             };
             Ok((anchor - duration, anchor))
-        } else {
-            // Case where there's no entries and no set time span given.
+        } 
+        // Auto-Fit Mode
+        // Fits the window to exactly cover all provided entries
+        else {
             if self.entries.is_empty() {
+                // ! Remember to implement custom errors!
                 return Err("No entries provided and no fixed duration set".into());
             }
             let end = self.entries.last().unwrap().date;
