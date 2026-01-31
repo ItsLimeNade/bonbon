@@ -579,7 +579,7 @@ impl<'a> GlucoseGraphBuilder<'a> {
                 let max_tx = (ctx.viewport.plot_right - dim_time.0) as i32;
                 tx = tx.clamp(min_tx, max_tx);
 
-                let ty = (ctx.viewport.plot_bottom + 10.0 * ctx.viewport.s) as i32;
+                let ty = (ctx.viewport.plot_bottom + 25.0 * ctx.viewport.s) as i32;
 
                 draw_text_mut(
                     img,
@@ -603,7 +603,7 @@ impl<'a> GlucoseGraphBuilder<'a> {
                 let max_rx = (ctx.viewport.plot_right - dim_rel.0) as i32;
                 rx = rx.clamp(min_tx, max_rx);
                 let ry = (ctx.viewport.plot_bottom
-                    + 10.0 * ctx.viewport.s
+                    + 25.0 * ctx.viewport.s
                     + dim_time.1
                     + 4.0 * ctx.viewport.s) as i32;
 
@@ -620,20 +620,24 @@ impl<'a> GlucoseGraphBuilder<'a> {
         }
     }
 
+    /// Private helper function that draws the... you guessed it! Borders of the axis lines!
     fn draw_axis_border(&self, img: &mut RgbaImage, ctx: &RenderContext) {
         let axis_thickness = (2.0 * ctx.viewport.s).ceil() as i32;
         for i in 0..axis_thickness {
             let offset = i as f32;
+            let overlap_offset: f32 = 3.0 * axis_thickness as f32;
+            // Y axis
             draw_line_segment_mut(
                 img,
-                (ctx.viewport.plot_left - offset, ctx.viewport.plot_top),
-                (ctx.viewport.plot_left - offset, ctx.viewport.plot_bottom),
+                (ctx.viewport.plot_left - offset - overlap_offset, ctx.viewport.plot_top - overlap_offset),
+                (ctx.viewport.plot_left - offset - overlap_offset, ctx.viewport.plot_bottom + overlap_offset),
                 self.theme.axis_lines,
             );
+            // X axis
             draw_line_segment_mut(
                 img,
-                (ctx.viewport.plot_left, ctx.viewport.plot_bottom + offset),
-                (ctx.viewport.plot_right, ctx.viewport.plot_bottom + offset),
+                (ctx.viewport.plot_left - overlap_offset, ctx.viewport.plot_bottom + offset + overlap_offset),
+                (ctx.viewport.plot_right + overlap_offset, ctx.viewport.plot_bottom + offset + overlap_offset),
                 self.theme.axis_lines,
             );
         }
