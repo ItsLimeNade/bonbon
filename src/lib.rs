@@ -1,7 +1,8 @@
 pub mod models;
 pub mod theme;
-pub mod utils {
+mod utils {
     pub mod drawing;
+    pub mod color;
 }
 pub mod charts {
     pub mod glucose;

@@ -86,3 +86,83 @@ pub fn draw_insulin_triangle(img: &mut RgbaImage, x: f32, y: f32, color: Rgba<u8
 pub fn draw_carb_circle(img: &mut RgbaImage, x: f32, y: f32, radius: i32, color: Rgba<u8>) {
     draw_filled_circle_mut(img, (x as i32, y as i32), radius, color);
 }
+/// Draws an carb circle that darkens it's shape when overlapping with an other one.
+pub fn draw_smart_circle(
+    img: &mut RgbaImage,
+    cx: i32,
+    cy: i32,
+    radius: i32,
+    color: Rgba<u8>,
+    dark_color: Rgba<u8>,
+    bg_color: Rgba<u8>,
+) {
+    let r2 = (radius * radius) as i32;
+    let min_x = (cx - radius).max(0);
+    let max_x = (cx + radius).min(img.width() as i32 - 1);
+    let min_y = (cy - radius).max(0);
+    let max_y = (cy + radius).min(img.height() as i32 - 1);
+
+    for y in min_y..=max_y {
+        for x in min_x..=max_x {
+            let dx = x - cx;
+            let dy = y - cy;
+            if dx * dx + dy * dy <= r2 {
+                let current_px = img.get_pixel(x as u32, y as u32);
+                let draw_col = if current_px == &bg_color {
+                    color
+                } else {
+                    dark_color
+                };
+                img.put_pixel(x as u32, y as u32, draw_col);
+            }
+        }
+    }
+}
+
+/// Draws an insulin triangle that darkens it's shape when overlapping with an other one.
+pub fn draw_smart_triangle(
+    img: &mut RgbaImage,
+    center: (i32, i32),
+    size: f32,
+    color: Rgba<u8>,
+    dark_color: Rgba<u8>,
+    bg_color: Rgba<u8>,
+) {
+    let x = center.0 as f32;
+    let y = center.1 as f32;
+
+    let p1 = ((x - size) as i32, (y - size) as i32);
+    let p2 = ((x + size) as i32, (y - size) as i32);
+    let p3 = (x as i32, (y + size) as i32);
+
+    let min_x = p1.0.min(p2.0).min(p3.0).max(0);
+    let max_x = p1.0.max(p2.0).max(p3.0).min(img.width() as i32 - 1);
+    let min_y = p1.1.min(p2.1).min(p3.1).max(0);
+    let max_y = p1.1.max(p2.1).max(p3.1).min(img.height() as i32 - 1);
+
+    let sign = |p1: (i32, i32), p2: (i32, i32), p3: (i32, i32)| -> i32 {
+        (p1.0 - p3.0) * (p2.1 - p3.1) - (p2.0 - p3.0) * (p1.1 - p3.1)
+    };
+
+    for y in min_y..=max_y {
+        for x in min_x..=max_x {
+            let pt = (x, y);
+            let d1 = sign(pt, p1, p2);
+            let d2 = sign(pt, p2, p3);
+            let d3 = sign(pt, p3, p1);
+
+            let has_neg = (d1 < 0) || (d2 < 0) || (d3 < 0);
+            let has_pos = (d1 > 0) || (d2 > 0) || (d3 > 0);
+
+            if !(has_neg && has_pos) {
+                let current_px = img.get_pixel(x as u32, y as u32);
+                let draw_col = if current_px == &bg_color {
+                    color
+                } else {
+                    dark_color
+                };
+                img.put_pixel(x as u32, y as u32, draw_col);
+            }
+        }
+    }
+}
