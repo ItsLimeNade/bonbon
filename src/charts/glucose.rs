@@ -240,7 +240,7 @@ impl<'a> GlucoseGraphBuilder<'a> {
     }
 
     /// Forces the graph to display a specific time range (e.g., 24 hours) ending at "now" (or the latest entry).
-    /// 
+    ///
     /// If set, this overrides the dynamic auto-scaling of the time axis.
     pub fn with_fixed_duration(mut self, duration: Duration) -> Self {
         self.fixed_duration = Some(duration);
@@ -357,7 +357,9 @@ impl<'a> GlucoseGraphBuilder<'a> {
             } else {
                 // Window = [Start, End of Data]
                 if self.entries.is_empty() {
-                    return Err("No entries provided and no fixed duration set with custom start".into());
+                    return Err(
+                        "No entries provided and no fixed duration set with custom start".into(),
+                    );
                 }
                 self.entries.last().unwrap().date
             };
@@ -381,7 +383,7 @@ impl<'a> GlucoseGraphBuilder<'a> {
                 }
             };
             Ok((anchor - duration, anchor))
-        } 
+        }
         // Auto-Fit Mode
         // Fits the window to exactly cover all provided entries
         else {
