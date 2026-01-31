@@ -629,15 +629,27 @@ impl<'a> GlucoseGraphBuilder<'a> {
             // Y axis
             draw_line_segment_mut(
                 img,
-                (ctx.viewport.plot_left - offset - overlap_offset, ctx.viewport.plot_top - overlap_offset),
-                (ctx.viewport.plot_left - offset - overlap_offset, ctx.viewport.plot_bottom + overlap_offset),
+                (
+                    ctx.viewport.plot_left - offset - overlap_offset,
+                    ctx.viewport.plot_top - overlap_offset,
+                ),
+                (
+                    ctx.viewport.plot_left - offset - overlap_offset,
+                    ctx.viewport.plot_bottom + overlap_offset,
+                ),
                 self.theme.axis_lines,
             );
             // X axis
             draw_line_segment_mut(
                 img,
-                (ctx.viewport.plot_left - overlap_offset, ctx.viewport.plot_bottom + offset + overlap_offset),
-                (ctx.viewport.plot_right + overlap_offset, ctx.viewport.plot_bottom + offset + overlap_offset),
+                (
+                    ctx.viewport.plot_left - overlap_offset,
+                    ctx.viewport.plot_bottom + offset + overlap_offset,
+                ),
+                (
+                    ctx.viewport.plot_right + overlap_offset,
+                    ctx.viewport.plot_bottom + offset + overlap_offset,
+                ),
                 self.theme.axis_lines,
             );
         }
