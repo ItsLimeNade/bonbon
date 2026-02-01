@@ -1,5 +1,5 @@
 use image::{Rgba, RgbaImage};
-use imageproc::drawing::{draw_filled_circle_mut, draw_line_segment_mut, draw_polygon_mut};
+use imageproc::drawing::{draw_filled_circle_mut, draw_polygon_mut};
 use imageproc::point::Point;
 
 /// Draws a dashed vertical line with a specific thickness.
@@ -15,24 +15,21 @@ pub fn draw_dashed_vertical_line(
 ) {
     let mut current_y = y_start as i32;
     let end_y = y_end as i32;
-
-    // Center the thickness around x
-    let half_width = thickness / 2;
-    let range_start = -half_width;
-    let range_end = thickness - half_width;
+    
+    let x_start = (x - (thickness as f32 / 2.0)).round() as i32;
 
     while current_y < end_y {
-        let next_y = (current_y + dash_length).min(end_y);
+        let segment_h = dash_length.min(end_y - current_y);
+        
+        draw_fast_rect(
+            img,
+            x_start,
+            current_y,
+            thickness as u32,
+            segment_h as u32,
+            color
+        );
 
-        for offset in range_start..range_end {
-            let draw_x = x + offset as f32;
-            draw_line_segment_mut(
-                img,
-                (draw_x, current_y as f32),
-                (draw_x, next_y as f32),
-                color,
-            );
-        }
         current_y += dash_length + gap_length;
     }
 }
@@ -50,24 +47,21 @@ pub fn draw_dashed_horizontal_line(
 ) {
     let mut current_x = x_start as i32;
     let end_x = x_end as i32;
-
-    // Center the thickness around y
-    let half_width = thickness / 2;
-    let range_start = -half_width;
-    let range_end = thickness - half_width;
+    
+    let y_start = (y - (thickness as f32 / 2.0)).round() as i32;
 
     while current_x < end_x {
-        let next_x = (current_x + dash_length).min(end_x);
+        let segment_w = dash_length.min(end_x - current_x);
 
-        for offset in range_start..range_end {
-            let draw_y = y + offset as f32;
-            draw_line_segment_mut(
-                img,
-                (current_x as f32, draw_y),
-                (next_x as f32, draw_y),
-                color,
-            );
-        }
+        draw_fast_rect(
+            img,
+            current_x,
+            y_start,
+            segment_w as u32,
+            thickness as u32,
+            color
+        );
+
         current_x += dash_length + gap_length;
     }
 }

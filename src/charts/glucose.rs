@@ -276,7 +276,7 @@ impl<'a> GlucoseGraphBuilder<'a> {
 
         // Here we're sorting the entries with worst-case scenario of O(n * log(n)) for the time complexity.
         // Sorting them will allow us to correctly fetch the graph's time span.
-        self.entries.sort_unstable_by_key(|e| e.date);
+        self.entries.par_sort_unstable_by_key(|e| e.date);
         let (start_time, end_time) = self.determine_time_range()?;
         let time_span_secs = (end_time - start_time).num_seconds().max(1) as f32;
 
@@ -429,10 +429,14 @@ impl<'a> GlucoseGraphBuilder<'a> {
                     (clamp_min, clamp_max)
                 } else {
                     let (min_sgv, max_sgv) = visible_entries
-                        .iter()
-                        .fold((f32::MAX, f32::MIN), |(min, max), e| {
-                            (min.min(e.sgv), max.max(e.sgv))
-                        });
+                        .par_iter()
+                        .map(|e| (e.sgv, e.sgv))
+                        .reduce(
+                            || (f32::MAX, f32::MIN),
+                            |(min_a, max_a), (min_b, max_b)| {
+                                (min_a.min(min_b), max_a.max(max_b))
+                            }
+                        );
 
                     let calc_max = ((max_sgv + 20.0) / 10.0).ceil() * 10.0;
                     let calc_min = ((min_sgv - 20.0) / 10.0).floor() * 10.0;
@@ -776,7 +780,7 @@ impl<'a> GlucoseGraphBuilder<'a> {
     ) -> Vec<&GraphTreatment> {
         let mut visible: Vec<&GraphTreatment> = self
             .treatments
-            .iter()
+            .par_iter()
             .filter(|t| t.date >= start && t.date <= end)
             .collect();
         visible.sort_by_key(|t| t.date);
@@ -850,7 +854,7 @@ impl<'a> GlucoseGraphBuilder<'a> {
                 let dark_carbs = darken_color(self.theme.carbs, 0.6);
 
                 let all_ins_values: Vec<f32> = treatments
-                    .iter()
+                    .par_iter()
                     .filter_map(|t| t.insulin)
                     .filter(|&v| v > self.microbolus_threshold)
                     .collect();
@@ -873,7 +877,7 @@ impl<'a> GlucoseGraphBuilder<'a> {
                     let x = ctx.project_x(t.date);
                     let closest = self
                         .entries
-                        .iter()
+                        .par_iter()
                         .min_by_key(|e| (e.date.timestamp() - t.date.timestamp()).abs());
                     let base_y = if let Some(entry) = closest {
                         ctx.project_y(entry.sgv)
@@ -1040,7 +1044,7 @@ impl<'a> GlucoseGraphBuilder<'a> {
                 }
 
                 for group in groups {
-                    let x_sum: f32 = group.iter().map(|t| ctx.project_x(t.date)).sum();
+                    let x_sum: f32 = group.par_iter().map(|t| ctx.project_x(t.date)).sum();
                     let x_center = x_sum / group.len() as f32;
                     let mut sorted_group = group.clone();
                     sorted_group.sort_by_key(|t| std::cmp::Reverse(t.date));
@@ -1103,10 +1107,25 @@ impl<'a> GlucoseGraphBuilder<'a> {
     fn draw_entries(&self, img: &mut RgbaImage, ctx: &RenderContext, entries: &[GraphEntry]) {
         let base_point_radius = if self.entries.len() > 100 { 4.0 } else { 6.0 };
         let point_radius = (base_point_radius + 1.0) * ctx.viewport.s;
+        
+        // Decimation State
+        let mut last_draw_pos: Option<(i32, i32)> = None;
+        let min_dist_sq = (point_radius * 0.5).powf(2.0); // Skip if closer than half a radius
 
         for e in entries {
             let x = ctx.project_x(e.date);
             let y = ctx.project_y(e.sgv);
+            let ix = x as i32;
+            let iy = y as i32;
+
+            if let Some((lx, ly)) = last_draw_pos {
+                let dx = (ix - lx) as f32;
+                let dy = (iy - ly) as f32;
+                if dx*dx + dy*dy < min_dist_sq {
+                    continue;
+                }
+            }
+
             let color = if e.sgv > self.target_high {
                 self.theme.glucose_high
             } else if e.sgv < self.target_low {
@@ -1115,7 +1134,8 @@ impl<'a> GlucoseGraphBuilder<'a> {
                 self.theme.glucose_in_range
             };
 
-            draw_filled_circle_mut(img, (x as i32, y as i32), point_radius as i32, color);
+            draw_filled_circle_mut(img, (ix, iy), point_radius as i32, color);
+            last_draw_pos = Some((ix, iy));
         }
     }
 }
@@ -1131,9 +1151,15 @@ fn text_dimensions(text: &str, size: f32, _font: &FontRef) -> (f32, f32) {
 }
 
 fn min_max(values: &[f32]) -> (f32, f32) {
-    values.iter().fold((f32::MAX, f32::MIN), |(min, max), &v| {
-        (min.min(v), max.max(v))
-    })
+    values.par_iter()
+        .fold(
+            || (f32::MAX, f32::MIN),
+            |(min, max), &v| (min.min(v), max.max(v))
+        )
+        .reduce(
+            || (f32::MAX, f32::MIN), // Identity for the reduction
+            |(min_a, max_a), (min_b, max_b)| (min_a.min(min_b), max_a.max(max_b))
+        )
 }
 
 fn calculate_dynamic_size(
