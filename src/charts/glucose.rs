@@ -5,7 +5,7 @@ use crate::models::{
 use crate::theme::Theme;
 use crate::utils::color::darken_color;
 use crate::utils::drawing::{
-    draw_dashed_horizontal_line, draw_dashed_vertical_line, draw_smart_circle, draw_smart_triangle, draw_fast_rect
+    create_circle_sprite, draw_dashed_horizontal_line, draw_dashed_vertical_line, draw_fast_rect, draw_smart_circle, draw_smart_triangle
 };
 
 use rayon::prelude::*;
@@ -1105,12 +1105,23 @@ impl<'a> GlucoseGraphBuilder<'a> {
 
     /// Private helper function to draw entries on the graph.
     fn draw_entries(&self, img: &mut RgbaImage, ctx: &RenderContext, entries: &[GraphEntry]) {
+        if entries.is_empty() { return; }
+
         let base_point_radius = if self.entries.len() > 100 { 4.0 } else { 6.0 };
         let point_radius = (base_point_radius + 1.0) * ctx.viewport.s;
-        
-        // Decimation State
+        let radius_i32 = point_radius as i32;
+
+        let (sprite_size, sprite_high) = create_circle_sprite(radius_i32, self.theme.glucose_high);
+        let (_, sprite_low) = create_circle_sprite(radius_i32, self.theme.glucose_low);
+        let (_, sprite_range) = create_circle_sprite(radius_i32, self.theme.glucose_in_range);
+
         let mut last_draw_pos: Option<(i32, i32)> = None;
-        let min_dist_sq = (point_radius * 0.5).powf(2.0); // Skip if closer than half a radius
+        let min_dist_sq = (point_radius * 0.5).powf(2.0); 
+
+        let (img_w, img_h) = img.dimensions();
+        let img_w_i32 = img_w as i32;
+        let img_h_i32 = img_h as i32;
+        let img_raw = img.as_mut();
 
         for e in entries {
             let x = ctx.project_x(e.date);
@@ -1121,20 +1132,47 @@ impl<'a> GlucoseGraphBuilder<'a> {
             if let Some((lx, ly)) = last_draw_pos {
                 let dx = (ix - lx) as f32;
                 let dy = (iy - ly) as f32;
-                if dx*dx + dy*dy < min_dist_sq {
+                if dx * dx + dy * dy < min_dist_sq {
                     continue;
                 }
             }
 
-            let color = if e.sgv > self.target_high {
-                self.theme.glucose_high
+            let sprite_buf = if e.sgv > self.target_high {
+                &sprite_high
             } else if e.sgv < self.target_low {
-                self.theme.glucose_low
+                &sprite_low
             } else {
-                self.theme.glucose_in_range
+                &sprite_range
             };
 
-            draw_filled_circle_mut(img, (ix, iy), point_radius as i32, color);
+            let sprite_offset = radius_i32; 
+            
+            for sy in 0..sprite_size {
+                let dy = iy - sprite_offset + sy as i32;
+                
+                if dy < 0 || dy >= img_h_i32 { continue; }
+                
+                let row_idx_img = (dy as usize * img_w as usize) * 4;
+                let row_idx_sprite = (sy * sprite_size) as usize * 4;
+
+                for sx in 0..sprite_size {
+                    let dx = ix - sprite_offset + sx as i32;
+                    
+                    if dx < 0 || dx >= img_w_i32 { continue; }
+
+                    let sprite_px_idx = row_idx_sprite + sx as usize * 4;
+
+                    if sprite_buf[sprite_px_idx + 3] != 0 {
+                        let dst_idx = row_idx_img + dx as usize * 4;
+                        
+                        img_raw[dst_idx] = sprite_buf[sprite_px_idx];
+                        img_raw[dst_idx+1] = sprite_buf[sprite_px_idx+1];
+                        img_raw[dst_idx+2] = sprite_buf[sprite_px_idx+2];
+                        img_raw[dst_idx+3] = sprite_buf[sprite_px_idx+3];
+                    }
+                }
+            }
+
             last_draw_pos = Some((ix, iy));
         }
     }

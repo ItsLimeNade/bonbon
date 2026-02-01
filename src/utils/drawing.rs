@@ -92,24 +92,41 @@ pub fn draw_smart_circle(
     dark_color: Rgba<u8>,
     bg_color: Rgba<u8>,
 ) {
-    let r2 = (radius * radius) as i32;
+    let (width, height) = img.dimensions();
+    let w = width as i32;
+    let h = height as i32;
+
+    let r2 = radius * radius;
     let min_x = (cx - radius).max(0);
-    let max_x = (cx + radius).min(img.width() as i32 - 1);
+    let max_x = (cx + radius).min(w - 1);
     let min_y = (cy - radius).max(0);
-    let max_y = (cy + radius).min(img.height() as i32 - 1);
+    let max_y = (cy + radius).min(h - 1);
+
+    let raw = img.as_mut();
 
     for y in min_y..=max_y {
+        let row_start = (y as usize) * (width as usize) * 4;
+        
         for x in min_x..=max_x {
             let dx = x - cx;
             let dy = y - cy;
+            
             if dx * dx + dy * dy <= r2 {
-                let current_px = img.get_pixel(x as u32, y as u32);
-                let draw_col = if current_px == &bg_color {
-                    color
-                } else {
-                    dark_color
-                };
-                img.put_pixel(x as u32, y as u32, draw_col);
+                let pixel_idx = row_start + (x as usize) * 4;
+                
+                let r = raw[pixel_idx];
+                let g = raw[pixel_idx + 1];
+                let b = raw[pixel_idx + 2];
+                let a = raw[pixel_idx + 3];
+
+                let is_bg = r == bg_color[0] && g == bg_color[1] && b == bg_color[2] && a == bg_color[3];
+                
+                let draw_col = if is_bg { color } else { dark_color };
+
+                raw[pixel_idx] = draw_col[0];
+                raw[pixel_idx + 1] = draw_col[1];
+                raw[pixel_idx + 2] = draw_col[2];
+                raw[pixel_idx + 3] = draw_col[3];
             }
         }
     }
@@ -124,6 +141,10 @@ pub fn draw_smart_triangle(
     dark_color: Rgba<u8>,
     bg_color: Rgba<u8>,
 ) {
+    let (width, height) = img.dimensions();
+    let w_i32 = width as i32;
+    let h_i32 = height as i32;
+
     let x = center.0 as f32;
     let y = center.1 as f32;
 
@@ -132,17 +153,22 @@ pub fn draw_smart_triangle(
     let p3 = (x as i32, (y + size) as i32);
 
     let min_x = p1.0.min(p2.0).min(p3.0).max(0);
-    let max_x = p1.0.max(p2.0).max(p3.0).min(img.width() as i32 - 1);
+    let max_x = p1.0.max(p2.0).max(p3.0).min(w_i32 - 1);
     let min_y = p1.1.min(p2.1).min(p3.1).max(0);
-    let max_y = p1.1.max(p2.1).max(p3.1).min(img.height() as i32 - 1);
+    let max_y = p1.1.max(p2.1).max(p3.1).min(h_i32 - 1);
 
     let sign = |p1: (i32, i32), p2: (i32, i32), p3: (i32, i32)| -> i32 {
         (p1.0 - p3.0) * (p2.1 - p3.1) - (p2.0 - p3.0) * (p1.1 - p3.1)
     };
 
+    let raw = img.as_mut();
+
     for y in min_y..=max_y {
+        let row_start = (y as usize) * (width as usize) * 4;
+
         for x in min_x..=max_x {
             let pt = (x, y);
+            
             let d1 = sign(pt, p1, p2);
             let d2 = sign(pt, p2, p3);
             let d3 = sign(pt, p3, p1);
@@ -151,13 +177,19 @@ pub fn draw_smart_triangle(
             let has_pos = (d1 > 0) || (d2 > 0) || (d3 > 0);
 
             if !(has_neg && has_pos) {
-                let current_px = img.get_pixel(x as u32, y as u32);
-                let draw_col = if current_px == &bg_color {
-                    color
-                } else {
-                    dark_color
-                };
-                img.put_pixel(x as u32, y as u32, draw_col);
+                let px_idx = row_start + (x as usize) * 4;
+
+                let is_bg = raw[px_idx] == bg_color[0] 
+                        && raw[px_idx + 1] == bg_color[1] 
+                        && raw[px_idx + 2] == bg_color[2] 
+                        && raw[px_idx + 3] == bg_color[3];
+
+                let draw_col = if is_bg { color } else { dark_color };
+
+                raw[px_idx] = draw_col[0];
+                raw[px_idx + 1] = draw_col[1];
+                raw[px_idx + 2] = draw_col[2];
+                raw[px_idx + 3] = draw_col[3];
             }
         }
     }
@@ -191,4 +223,26 @@ pub fn draw_fast_rect(img: &mut RgbaImage, x: i32, y: i32, w: u32, h: u32, color
 
         img.as_mut()[start_idx..end_idx].copy_from_slice(&row_fill);
     }
+}
+
+pub fn create_circle_sprite(radius: i32, color: Rgba<u8>) -> (u32, Vec<u8>) {
+    let side = (radius * 2 + 1) as u32;
+    let mut buffer = vec![0u8; (side * side * 4) as usize];
+    let r2 = radius * radius;
+    
+    for y in 0..side as i32 {
+        for x in 0..side as i32 {
+            let dx = x - radius;
+            let dy = y - radius;
+            if dx*dx + dy*dy <= r2 {
+                let idx = ((y as u32 * side + x as u32) * 4) as usize;
+                buffer[idx] = color[0];
+                buffer[idx+1] = color[1];
+                buffer[idx+2] = color[2];
+                buffer[idx+3] = color[3];
+            }
+            // else leave as 0 (transparent)
+        }
+    }
+    (side, buffer)
 }
