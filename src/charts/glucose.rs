@@ -99,6 +99,12 @@ pub struct GlucoseGraphBuilder<'a> {
     microbolus_threshold: f32,
 }
 
+impl<'a> Default for GlucoseGraphBuilder<'a> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl<'a> GlucoseGraphBuilder<'a> {
     pub fn new() -> Self {
         const DEFAULT_FONT: &[u8] = include_bytes!("../../assets/fonts/GeistMono-Regular.ttf");
@@ -509,7 +515,7 @@ impl<'a> GlucoseGraphBuilder<'a> {
             .and_local_timezone(self.timezone)
             .unwrap();
         if pointer < local_start {
-            pointer = pointer + Duration::days(1);
+            pointer += Duration::days(1);
         }
 
         while pointer <= local_end {
@@ -540,7 +546,7 @@ impl<'a> GlucoseGraphBuilder<'a> {
                     &date_str,
                 );
             }
-            pointer = pointer + Duration::days(1);
+            pointer += Duration::days(1);
         }
     }
 

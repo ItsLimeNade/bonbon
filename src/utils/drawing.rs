@@ -4,6 +4,7 @@ use imageproc::drawing::{draw_filled_circle_mut, draw_polygon_mut, draw_text_mut
 use imageproc::point::Point;
 
 /// Draws a dashed vertical line with a specific thickness.
+#[allow(clippy::too_many_arguments)]
 pub fn draw_dashed_vertical_line(
     img: &mut RgbaImage,
     x: f32,
@@ -36,6 +37,7 @@ pub fn draw_dashed_vertical_line(
 }
 
 /// Draws a dashed horizontal line with a specific thickness.
+#[allow(clippy::too_many_arguments)]
 pub fn draw_dashed_horizontal_line(
     img: &mut RgbaImage,
     y: f32,
@@ -258,6 +260,7 @@ pub fn create_circle_sprite(radius: i32, color: Rgba<u8>) -> (u32, Vec<u8>) {
     (side, buffer)
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn draw_text_with_outline(
     img: &mut RgbaImage,
     text_color: Rgba<u8>,

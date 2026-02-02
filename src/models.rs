@@ -68,35 +68,25 @@ impl Default for GraphScaling {
 }
 
 /// Determines how treatments (Insulin/Carbs) are positioned.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub enum TreatmentDisplayMode {
     /// Treatments are shown in fixed lanes at the bottom of the graph (Timeline view).
+    #[default]
     Timeline,
     /// Treatments are "attached" to the closest SGV point in time.
     /// Carbs appear above the SGV, Insulin appears below.
     Contextual,
 }
 
-impl Default for TreatmentDisplayMode {
-    fn default() -> Self {
-        Self::Timeline
-    }
-}
-
 /// Configuration for the X-Axis time labels.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub enum TimeAxisMode {
     /// Standard hourly ticks.
+    #[default]
     Simple,
     /// Distributes labels equally (e.g., every N hours) and shows both:
     /// 1. Local Time (HH:MM)
     /// 2. Relative Time (-2h)
     EquallyDistributed { count: u32 },
     // I'll add more in the future... Probably?
-}
-
-impl Default for TimeAxisMode {
-    fn default() -> Self {
-        Self::Simple
-    }
 }
