@@ -31,3 +31,7 @@ cinnamon = "0.1.3"
 [features]
 default = []
 cinnamon = ["dep:cinnamon"]
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
