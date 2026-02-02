@@ -100,7 +100,9 @@ pub struct GlucoseGraphBuilder<'a> {
 }
 
 impl<'a> GlucoseGraphBuilder<'a> {
-    pub fn new(theme: Theme, font_data: &'a [u8]) -> Self {
+    pub fn new() -> Self {
+        const DEFAULT_FONT: &[u8] = include_bytes!("../../assets/fonts/GeistMono-Regular.ttf");
+
         Self {
             entries: Vec::new(),
             treatments: Vec::new(),
@@ -114,8 +116,8 @@ impl<'a> GlucoseGraphBuilder<'a> {
             custom_start: None,
             timezone: chrono_tz::UTC,
             layout: LayoutConfig::default(),
-            theme,
-            font: font_data,
+            theme: Theme::dark(),
+            font: DEFAULT_FONT,
             microbolus_threshold: 0.0,
         }
     }
