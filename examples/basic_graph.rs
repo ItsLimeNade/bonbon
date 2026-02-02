@@ -5,21 +5,28 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Sample glucose data
     let now = Utc::now();
     let entries = vec![
-        GraphEntry { sgv: 110.0, date: now - Duration::minutes(30) },
-        GraphEntry { sgv: 145.0, date: now - Duration::minutes(15) },
-        GraphEntry { sgv: 185.0, date: now },
+        GraphEntry {
+            sgv: 110.0,
+            date: now - Duration::minutes(30),
+        },
+        GraphEntry {
+            sgv: 145.0,
+            date: now - Duration::minutes(15),
+        },
+        GraphEntry {
+            sgv: 185.0,
+            date: now,
+        },
     ];
 
     // Sample treatment data
-    let treatments = vec![
-        GraphTreatment {
-            insulin: Some(2.5),
-            carbs: Some(30.0),
-            mbg: None,
-            date: now - Duration::minutes(45),
-            is_isf: false,
-        },
-    ];
+    let treatments = vec![GraphTreatment {
+        insulin: Some(2.5),
+        carbs: Some(30.0),
+        mbg: None,
+        date: now - Duration::minutes(45),
+        is_isf: false,
+    }];
 
     // Configure the graph layout
     let layout = LayoutConfig {
@@ -44,6 +51,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // With a few additional lines of code, it is possible to increase the compression speeds by
     // a big margin while keeping a very reasonable file size.
     image.save("glucose_report.png")?;
-    
+
     Ok(())
 }

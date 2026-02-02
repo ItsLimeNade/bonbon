@@ -1,7 +1,7 @@
 //! # bonbon
 //!
-//! `bonbon` is a high-performance glucose data visualization library designed for 
-//! rendering clear, informative blood glucose charts. It focuses on efficiency and 
+//! `bonbon` is a high-performance glucose data visualization library designed for
+//! rendering clear, informative blood glucose charts. It focuses on efficiency and
 //! visual clarity, making it suitable for both web backends and embedded systems.
 //!
 //! ## Features
