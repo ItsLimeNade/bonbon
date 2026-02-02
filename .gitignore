@@ -22,8 +22,8 @@ index.d.ts
 #  option (not recommended) you can uncomment the following to ignore the entire idea folder.
 #.idea/
 
-tests/
 # Image output when testing graphs
-*.png
+tests/
+
 # Log outputs
 *.txt
