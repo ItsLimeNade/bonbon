@@ -1,0 +1,16 @@
+{
+    "background": "#141414FF",
+    "insulin": "#4287F5FF",
+    "carbs": "#F5C842FF",
+    "glucose_high": "#FF6464FF",
+    "glucose_low": "#FF3232FF",
+    "glucose_in_range": "#64FF64FF",
+    "glucose_reading_fill": "#323232FF",
+    "glucose_reading_outline": "#FFFFFFFF",
+    "axis_lines": "#505050FF",
+    "grid_major": "#3C3C3C64",
+    "grid_minor": "#292828",
+    "text_primary": "#F0F0F0FF",
+    "text_secondary": "#B4B4B4FF",
+    "text_dim": "#646464FF"
+}

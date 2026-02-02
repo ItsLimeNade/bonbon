@@ -199,6 +199,7 @@ dependencies = [
  "cinnamon",
  "image",
  "imageproc",
+ "rayon",
  "serde",
  "serde_json",
  "thiserror",

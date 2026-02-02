@@ -1,6 +1,29 @@
+//! # bonbon
+//!
+//! `bonbon` is a high-performance glucose data visualization library designed for
+//! rendering clear, informative blood glucose charts. It focuses on efficiency and
+//! visual clarity, making it suitable for both web backends and embedded systems.
+//!
+//! ## Features
+//!
+//! * **High Performance**: Leverages `rayon` for parallel data processing and optimized sprite-based rendering.
+//! * **Dynamic Scaling**: Automatically adjusts Y-axis bounds based on data range.
+//! * **Flexible Unit Support**: Native support for mg/dL and mmol/L, including dual-unit display modes.
+//! * **Treatment Visualization**: Render insulin boluses, carbohydrate intake, and manual fingerstick calibrations.
+//! * **Theming**: Fully customizable color palettes.
+//!
+//! ## Architecture
+//!
+//! The crate is organized into several modules:
+//! * [`models`]: Data structures for glucose readings, treatments, and axis configurations.
+//! * [`charts`]: The primary plotting logic, specifically the [`GlucoseGraphBuilder`].
+//! * [`theme`]: Styling and color management.
+//! * [`prelude`]: A convenient module to import common traits and structures.
+
 pub mod models;
 pub mod theme;
-pub mod utils {
+mod utils {
+    pub mod color;
     pub mod drawing;
 }
 pub mod charts {
