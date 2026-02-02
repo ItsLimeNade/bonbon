@@ -5,15 +5,16 @@ use crate::models::{
 use crate::theme::Theme;
 use crate::utils::color::darken_color;
 use crate::utils::drawing::{
-    create_circle_sprite, draw_dashed_horizontal_line, draw_dashed_vertical_line, draw_fast_rect, draw_smart_circle, draw_smart_triangle
+    create_circle_sprite, draw_dashed_horizontal_line, draw_dashed_vertical_line, draw_fast_rect,
+    draw_smart_circle, draw_smart_triangle, draw_text_with_outline,
 };
 
-use rayon::prelude::*;
 use ab_glyph::{FontRef, PxScale};
 use chrono::{Duration, Utc};
 use chrono_tz::Tz;
 use image::{Rgba, RgbaImage};
 use imageproc::drawing::{draw_filled_circle_mut, draw_line_segment_mut, draw_text_mut};
+use rayon::prelude::*;
 
 /// Configuration for the visual layout of the graph.
 #[derive(Clone, Debug)]
@@ -428,14 +429,10 @@ impl<'a> GlucoseGraphBuilder<'a> {
                 if visible_entries.is_empty() {
                     (clamp_min, clamp_max)
                 } else {
-                    let (min_sgv, max_sgv) = visible_entries
-                        .par_iter()
-                        .map(|e| (e.sgv, e.sgv))
-                        .reduce(
+                    let (min_sgv, max_sgv) =
+                        visible_entries.par_iter().map(|e| (e.sgv, e.sgv)).reduce(
                             || (f32::MAX, f32::MIN),
-                            |(min_a, max_a), (min_b, max_b)| {
-                                (min_a.min(min_b), max_a.max(max_b))
-                            }
+                            |(min_a, max_a), (min_b, max_b)| (min_a.min(min_b), max_a.max(max_b)),
                         );
 
                     let calc_max = ((max_sgv + 20.0) / 10.0).ceil() * 10.0;
@@ -630,7 +627,7 @@ impl<'a> GlucoseGraphBuilder<'a> {
         let axis_thickness = (2.0 * ctx.viewport.s).ceil() as u32;
         let overlap_offset = 3.0 * axis_thickness as f32;
 
-        //  Y Axis 
+        //  Y Axis
         draw_fast_rect(
             img,
             (ctx.viewport.plot_left - overlap_offset - axis_thickness as f32) as i32,
@@ -643,7 +640,7 @@ impl<'a> GlucoseGraphBuilder<'a> {
         // X Axis
         draw_fast_rect(
             img,
-            (ctx.viewport.plot_left - overlap_offset) as i32, 
+            (ctx.viewport.plot_left - overlap_offset) as i32,
             (ctx.viewport.plot_bottom + overlap_offset) as i32,
             (ctx.viewport.plot_w + (2.0 * overlap_offset)) as u32,
             axis_thickness,
@@ -799,49 +796,6 @@ impl<'a> GlucoseGraphBuilder<'a> {
         let font_size_sm = (24.0 + 1.0) * ctx.viewport.s;
         let font_size_ctx = (26.0 + 1.0) * ctx.viewport.s;
 
-        // Draw MBG Circles first (independent of mode)
-        for t in treatments {
-            if let Some(mbg) = t.mbg {
-                let x = ctx.project_x(t.date);
-                let y = ctx.project_y(mbg);
-                let outline_r = (point_radius * 1.5) as i32;
-                let fill_r = point_radius as i32;
-                draw_filled_circle_mut(
-                    img,
-                    (x as i32, y as i32),
-                    outline_r,
-                    self.theme.glucose_reading_outline,
-                );
-                draw_filled_circle_mut(
-                    img,
-                    (x as i32, y as i32),
-                    fill_r,
-                    self.theme.glucose_reading_fill,
-                );
-
-                let (val_str, _) = match self.unit_display {
-                    UnitDisplay::MgDl
-                    | UnitDisplay::Dual {
-                        primary: UnitPreference::MgDl,
-                    } => (format!("{:.0}", mbg), "mg/dL"),
-                    UnitDisplay::MmolL
-                    | UnitDisplay::Dual {
-                        primary: UnitPreference::MmolL,
-                    } => (format!("{:.1}", mbg / 18.0), "mmol/L"),
-                };
-                let dim = text_dimensions(&val_str, font_size_xs, ctx.font);
-                draw_text_mut(
-                    img,
-                    self.theme.text_primary,
-                    (x - dim.0 / 2.0) as i32,
-                    (y - outline_r as f32 - dim.1 - 5.0 * ctx.viewport.s) as i32,
-                    PxScale::from(font_size_xs),
-                    ctx.font,
-                    &val_str,
-                );
-            }
-        }
-
         match self.treatment_mode {
             TreatmentDisplayMode::Contextual => {
                 let insulin_offset_ctx = 45.0 * ctx.viewport.s;
@@ -872,6 +826,13 @@ impl<'a> GlucoseGraphBuilder<'a> {
 
                 let mut text_regions: Vec<(i32, i32, i32, i32)> = Vec::new();
                 let margin_overlap = 4.0 * ctx.viewport.s;
+
+                let overlap_targets = vec![
+                    self.theme.insulin,
+                    dark_insulin,
+                    self.theme.carbs,
+                    dark_carbs,
+                ];
 
                 for t in treatments {
                     let x = ctx.project_x(t.date);
@@ -906,7 +867,7 @@ impl<'a> GlucoseGraphBuilder<'a> {
                             size,
                             self.theme.insulin,
                             dark_insulin,
-                            self.theme.background,
+                            &overlap_targets,
                         );
 
                         if ins > self.microbolus_threshold {
@@ -935,9 +896,10 @@ impl<'a> GlucoseGraphBuilder<'a> {
                                 }
                             }
 
-                            draw_text_mut(
+                            draw_text_with_outline(
                                 img,
                                 self.theme.text_secondary,
+                                self.theme.background,
                                 text_x,
                                 text_y,
                                 text_scale,
@@ -966,7 +928,7 @@ impl<'a> GlucoseGraphBuilder<'a> {
                             radius as i32,
                             self.theme.carbs,
                             dark_carbs,
-                            self.theme.background,
+                            &overlap_targets,
                         );
 
                         let text = format!("{:.0}g", carbs);
@@ -993,9 +955,10 @@ impl<'a> GlucoseGraphBuilder<'a> {
                             }
                         }
 
-                        draw_text_mut(
+                        draw_text_with_outline(
                             img,
                             self.theme.text_secondary,
+                            self.theme.background,
                             text_x,
                             text_y,
                             text_scale,
@@ -1088,9 +1051,11 @@ impl<'a> GlucoseGraphBuilder<'a> {
                     for (i, item) in items.iter().enumerate() {
                         let y_pos = top_y + (i as f32 * item_height);
                         let dim = text_dimensions(&item.text, font_size_sm, ctx.font);
-                        draw_text_mut(
+
+                        draw_text_with_outline(
                             img,
                             item.color,
+                            self.theme.background,
                             (x_center - dim.0 / 2.0) as i32,
                             y_pos as i32,
                             PxScale::from(font_size_sm),
@@ -1101,11 +1066,56 @@ impl<'a> GlucoseGraphBuilder<'a> {
                 }
             }
         }
+
+        for t in treatments {
+            if let Some(mbg) = t.mbg {
+                let x = ctx.project_x(t.date);
+                let y = ctx.project_y(mbg);
+                let outline_r = (point_radius * 1.5) as i32;
+                let fill_r = point_radius as i32;
+                draw_filled_circle_mut(
+                    img,
+                    (x as i32, y as i32),
+                    outline_r,
+                    self.theme.glucose_reading_outline,
+                );
+                draw_filled_circle_mut(
+                    img,
+                    (x as i32, y as i32),
+                    fill_r,
+                    self.theme.glucose_reading_fill,
+                );
+
+                let (val_str, _) = match self.unit_display {
+                    UnitDisplay::MgDl
+                    | UnitDisplay::Dual {
+                        primary: UnitPreference::MgDl,
+                    } => (format!("{:.0}", mbg), "mg/dL"),
+                    UnitDisplay::MmolL
+                    | UnitDisplay::Dual {
+                        primary: UnitPreference::MmolL,
+                    } => (format!("{:.1}", mbg / 18.0), "mmol/L"),
+                };
+                let dim = text_dimensions(&val_str, font_size_xs, ctx.font);
+                draw_text_with_outline(
+                    img,
+                    self.theme.text_primary,
+                    self.theme.background,
+                    (x - dim.0 / 2.0) as i32,
+                    (y - outline_r as f32 - dim.1 - 5.0 * ctx.viewport.s) as i32,
+                    PxScale::from(font_size_xs),
+                    ctx.font,
+                    &val_str,
+                );
+            }
+        }
     }
 
     /// Private helper function to draw entries on the graph.
     fn draw_entries(&self, img: &mut RgbaImage, ctx: &RenderContext, entries: &[GraphEntry]) {
-        if entries.is_empty() { return; }
+        if entries.is_empty() {
+            return;
+        }
 
         let base_point_radius = if self.entries.len() > 100 { 4.0 } else { 6.0 };
         let point_radius = (base_point_radius + 1.0) * ctx.viewport.s;
@@ -1116,7 +1126,7 @@ impl<'a> GlucoseGraphBuilder<'a> {
         let (_, sprite_range) = create_circle_sprite(radius_i32, self.theme.glucose_in_range);
 
         let mut last_draw_pos: Option<(i32, i32)> = None;
-        let min_dist_sq = (point_radius * 0.5).powf(2.0); 
+        let min_dist_sq = (point_radius * 0.5).powf(2.0);
 
         let (img_w, img_h) = img.dimensions();
         let img_w_i32 = img_w as i32;
@@ -1145,30 +1155,34 @@ impl<'a> GlucoseGraphBuilder<'a> {
                 &sprite_range
             };
 
-            let sprite_offset = radius_i32; 
-            
+            let sprite_offset = radius_i32;
+
             for sy in 0..sprite_size {
                 let dy = iy - sprite_offset + sy as i32;
-                
-                if dy < 0 || dy >= img_h_i32 { continue; }
-                
+
+                if dy < 0 || dy >= img_h_i32 {
+                    continue;
+                }
+
                 let row_idx_img = (dy as usize * img_w as usize) * 4;
                 let row_idx_sprite = (sy * sprite_size) as usize * 4;
 
                 for sx in 0..sprite_size {
                     let dx = ix - sprite_offset + sx as i32;
-                    
-                    if dx < 0 || dx >= img_w_i32 { continue; }
+
+                    if dx < 0 || dx >= img_w_i32 {
+                        continue;
+                    }
 
                     let sprite_px_idx = row_idx_sprite + sx as usize * 4;
 
                     if sprite_buf[sprite_px_idx + 3] != 0 {
                         let dst_idx = row_idx_img + dx as usize * 4;
-                        
+
                         img_raw[dst_idx] = sprite_buf[sprite_px_idx];
-                        img_raw[dst_idx+1] = sprite_buf[sprite_px_idx+1];
-                        img_raw[dst_idx+2] = sprite_buf[sprite_px_idx+2];
-                        img_raw[dst_idx+3] = sprite_buf[sprite_px_idx+3];
+                        img_raw[dst_idx + 1] = sprite_buf[sprite_px_idx + 1];
+                        img_raw[dst_idx + 2] = sprite_buf[sprite_px_idx + 2];
+                        img_raw[dst_idx + 3] = sprite_buf[sprite_px_idx + 3];
                     }
                 }
             }
@@ -1189,14 +1203,15 @@ fn text_dimensions(text: &str, size: f32, _font: &FontRef) -> (f32, f32) {
 }
 
 fn min_max(values: &[f32]) -> (f32, f32) {
-    values.par_iter()
+    values
+        .par_iter()
         .fold(
             || (f32::MAX, f32::MIN),
-            |(min, max), &v| (min.min(v), max.max(v))
+            |(min, max), &v| (min.min(v), max.max(v)),
         )
         .reduce(
             || (f32::MAX, f32::MIN), // Identity for the reduction
-            |(min_a, max_a), (min_b, max_b)| (min_a.min(min_b), max_a.max(max_b))
+            |(min_a, max_a), (min_b, max_b)| (min_a.min(min_b), max_a.max(max_b)),
         )
 }
 

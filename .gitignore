@@ -25,3 +25,5 @@ index.d.ts
 tests/
 # Image output when testing graphs
 *.png
+# Log outputs
+*.txt

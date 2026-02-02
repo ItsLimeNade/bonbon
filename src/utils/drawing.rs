@@ -1,5 +1,6 @@
+use ab_glyph::{FontRef, PxScale};
 use image::{Rgba, RgbaImage};
-use imageproc::drawing::{draw_filled_circle_mut, draw_polygon_mut};
+use imageproc::drawing::{draw_filled_circle_mut, draw_polygon_mut, draw_text_mut};
 use imageproc::point::Point;
 
 /// Draws a dashed vertical line with a specific thickness.
@@ -15,19 +16,19 @@ pub fn draw_dashed_vertical_line(
 ) {
     let mut current_y = y_start as i32;
     let end_y = y_end as i32;
-    
+
     let x_start = (x - (thickness as f32 / 2.0)).round() as i32;
 
     while current_y < end_y {
         let segment_h = dash_length.min(end_y - current_y);
-        
+
         draw_fast_rect(
             img,
             x_start,
             current_y,
             thickness as u32,
             segment_h as u32,
-            color
+            color,
         );
 
         current_y += dash_length + gap_length;
@@ -47,7 +48,7 @@ pub fn draw_dashed_horizontal_line(
 ) {
     let mut current_x = x_start as i32;
     let end_x = x_end as i32;
-    
+
     let y_start = (y - (thickness as f32 / 2.0)).round() as i32;
 
     while current_x < end_x {
@@ -59,7 +60,7 @@ pub fn draw_dashed_horizontal_line(
             y_start,
             segment_w as u32,
             thickness as u32,
-            color
+            color,
         );
 
         current_x += dash_length + gap_length;
@@ -90,7 +91,7 @@ pub fn draw_smart_circle(
     radius: i32,
     color: Rgba<u8>,
     dark_color: Rgba<u8>,
-    bg_color: Rgba<u8>,
+    overlap_targets: &[Rgba<u8>],
 ) {
     let (width, height) = img.dimensions();
     let w = width as i32;
@@ -106,22 +107,26 @@ pub fn draw_smart_circle(
 
     for y in min_y..=max_y {
         let row_start = (y as usize) * (width as usize) * 4;
-        
+
         for x in min_x..=max_x {
             let dx = x - cx;
             let dy = y - cy;
-            
+
             if dx * dx + dy * dy <= r2 {
                 let pixel_idx = row_start + (x as usize) * 4;
-                
-                let r = raw[pixel_idx];
-                let g = raw[pixel_idx + 1];
-                let b = raw[pixel_idx + 2];
-                let a = raw[pixel_idx + 3];
 
-                let is_bg = r == bg_color[0] && g == bg_color[1] && b == bg_color[2] && a == bg_color[3];
-                
-                let draw_col = if is_bg { color } else { dark_color };
+                let current_pixel = Rgba([
+                    raw[pixel_idx],
+                    raw[pixel_idx + 1],
+                    raw[pixel_idx + 2],
+                    raw[pixel_idx + 3],
+                ]);
+
+                let draw_col = if overlap_targets.contains(&current_pixel) {
+                    dark_color
+                } else {
+                    color
+                };
 
                 raw[pixel_idx] = draw_col[0];
                 raw[pixel_idx + 1] = draw_col[1];
@@ -139,7 +144,7 @@ pub fn draw_smart_triangle(
     size: f32,
     color: Rgba<u8>,
     dark_color: Rgba<u8>,
-    bg_color: Rgba<u8>,
+    overlap_targets: &[Rgba<u8>],
 ) {
     let (width, height) = img.dimensions();
     let w_i32 = width as i32;
@@ -168,7 +173,7 @@ pub fn draw_smart_triangle(
 
         for x in min_x..=max_x {
             let pt = (x, y);
-            
+
             let d1 = sign(pt, p1, p2);
             let d2 = sign(pt, p2, p3);
             let d3 = sign(pt, p3, p1);
@@ -179,12 +184,18 @@ pub fn draw_smart_triangle(
             if !(has_neg && has_pos) {
                 let px_idx = row_start + (x as usize) * 4;
 
-                let is_bg = raw[px_idx] == bg_color[0] 
-                        && raw[px_idx + 1] == bg_color[1] 
-                        && raw[px_idx + 2] == bg_color[2] 
-                        && raw[px_idx + 3] == bg_color[3];
+                let current_pixel = Rgba([
+                    raw[px_idx],
+                    raw[px_idx + 1],
+                    raw[px_idx + 2],
+                    raw[px_idx + 3],
+                ]);
 
-                let draw_col = if is_bg { color } else { dark_color };
+                let draw_col = if overlap_targets.contains(&current_pixel) {
+                    dark_color
+                } else {
+                    color
+                };
 
                 raw[px_idx] = draw_col[0];
                 raw[px_idx + 1] = draw_col[1];
@@ -229,20 +240,42 @@ pub fn create_circle_sprite(radius: i32, color: Rgba<u8>) -> (u32, Vec<u8>) {
     let side = (radius * 2 + 1) as u32;
     let mut buffer = vec![0u8; (side * side * 4) as usize];
     let r2 = radius * radius;
-    
+
     for y in 0..side as i32 {
         for x in 0..side as i32 {
             let dx = x - radius;
             let dy = y - radius;
-            if dx*dx + dy*dy <= r2 {
+            if dx * dx + dy * dy <= r2 {
                 let idx = ((y as u32 * side + x as u32) * 4) as usize;
                 buffer[idx] = color[0];
-                buffer[idx+1] = color[1];
-                buffer[idx+2] = color[2];
-                buffer[idx+3] = color[3];
+                buffer[idx + 1] = color[1];
+                buffer[idx + 2] = color[2];
+                buffer[idx + 3] = color[3];
             }
             // else leave as 0 (transparent)
         }
     }
     (side, buffer)
+}
+
+pub fn draw_text_with_outline(
+    img: &mut RgbaImage,
+    text_color: Rgba<u8>,
+    outline_color: Rgba<u8>,
+    x: i32,
+    y: i32,
+    scale: PxScale,
+    font: &FontRef,
+    text: &str,
+) {
+    for ox in -1..=1 {
+        for oy in -1..=1 {
+            if ox == 0 && oy == 0 {
+                continue;
+            }
+            draw_text_mut(img, outline_color, x + ox, y + oy, scale, font, text);
+        }
+    }
+
+    draw_text_mut(img, text_color, x, y, scale, font, text);
 }
