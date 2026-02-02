@@ -45,7 +45,7 @@ Additional documentation can be found on the `docs.rs` website.
 
 ## Performance Tips
 
-To achieve the best possible rendering speed, it is highly recommended to compile with **native CPU optimizations**. This enables modern SIMD instructions (AVX2, NEON, etc.), which significantly accelerate the pixel blending and sprite rendering operations.
+To achieve the best possible rendering speed, it is highly recommended to compile with **native CPU optimizations**. This enables modern SIMD instructions (AVX2, NEON, etc.), which accelerates the pixel blending and sprite rendering operations.
 
 You can enable this by setting the `RUSTFLAGS` environment variable:
 
@@ -71,7 +71,6 @@ rustflags = ["-C", "target-cpu=native"]
 | **Extreme 8K** | 7680x4320 | 288 | 19.66ms | 218.67ms |
 | **High Data Volume** | 1920x1080 | 8,640 | 34.62ms | 206.94ms |
 
-### Graph build time (standart compilation)
 
 ## License
 
