@@ -1,3 +1,6 @@
+use std::format;
+use std::string::ToString;
+
 use crate::models::{
     GraphEntry, GraphScaling, GraphTreatment, TimeAxisMode, TreatmentDisplayMode, UnitDisplay,
     UnitPreference,
@@ -657,7 +660,6 @@ impl<'a> GlucoseGraphBuilder<'a> {
     }
 
     fn draw_labels_and_units(&self, img: &mut RgbaImage, ctx: &RenderContext) {
-        // Easy access to size changes
         let font_size_md = (30.0 + 1.0) * ctx.viewport.s;
         let font_size_sm = (24.0 + 1.0) * ctx.viewport.s;
         let font_size_xs = (20.0 + 1.0) * ctx.viewport.s;
@@ -732,15 +734,24 @@ impl<'a> GlucoseGraphBuilder<'a> {
         for i in 0..=steps {
             let val = ctx.y_min + (i as f32 * step_size);
             let y_pos = ctx.project_y(val);
+            
             let (main_text, sub_text) = match self.unit_display {
-                UnitDisplay::MgDl => (format!("{:.0}", val), None),
-                UnitDisplay::MmolL => (format!("{:.1}", val / 18.0), None),
+                UnitDisplay::MgDl => {
+                    let rounded = (val / 10.0).ceil() * 10.0;
+                    (format!("{:.0}", rounded), None)
+                }
+                UnitDisplay::MmolL => {
+                    let rounded = ((val / 18.0) * 2.0).ceil() / 2.0;
+                    (format!("{:.1}", rounded), None)
+                }
                 UnitDisplay::Dual { primary } => match primary {
                     UnitPreference::MgDl => {
-                        (format!("{:.0}", val), Some(format!("{:.1}", val / 18.0)))
+                        let rounded = (val / 10.0).ceil() * 10.0;
+                        (format!("{:.0}", rounded), Some(format!("{:.1}", val / 18.0)))
                     }
                     UnitPreference::MmolL => {
-                        (format!("{:.1}", val / 18.0), Some(format!("{:.0}", val)))
+                        let rounded = ((val / 18.0) * 2.0).ceil() / 2.0;
+                        (format!("{:.1}", rounded), Some(format!("{:.0}", val)))
                     }
                 },
             };
@@ -825,12 +836,12 @@ impl<'a> GlucoseGraphBuilder<'a> {
                 let (ins_min_val, ins_max_val) = min_max(&all_ins_values);
                 let (carb_min_val, carb_max_val) = min_max(&all_carb_values);
 
-                let ins_base_max = 22.0 * ctx.viewport.s;
-                let ins_base_min = 6.0 * ctx.viewport.s;
+                let ins_base_max = (22.0 * 2.0 / 3.0) * ctx.viewport.s;
+                let ins_base_min = (6.0 * 5.0 / 3.0) * ctx.viewport.s;
                 let ins_micro_size = 3.5 * ctx.viewport.s;
 
-                let carb_base_max = 25.0 * ctx.viewport.s;
-                let carb_base_min = 8.0 * ctx.viewport.s;
+                let carb_base_max = (25.0 * 2.0 / 3.0) * ctx.viewport.s;
+                let carb_base_min = (8.0 * 5.0 / 3.0) * ctx.viewport.s;
 
                 let mut text_regions: Vec<(i32, i32, i32, i32)> = Vec::new();
                 let margin_overlap = 4.0 * ctx.viewport.s;
