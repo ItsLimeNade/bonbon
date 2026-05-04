@@ -16,7 +16,7 @@
 //!
 //! The crate is organized into several modules:
 //! * [`models`]: Data structures for glucose readings, treatments, and axis configurations.
-//! * [`charts`]: The primary plotting logic, specifically the [`GlucoseGraphBuilder`].
+//! * [`charts`]: The primary plotting logic, including [`charts::glucose::GlucoseGraphBuilder`] and [`charts::bg_card::BgCardBuilder`].
 //! * [`theme`]: Styling and color management.
 //! * [`prelude`]: A convenient module to import common traits and structures.
 
@@ -28,10 +28,12 @@ mod utils {
 }
 pub mod charts {
     pub mod glucose;
+    pub mod bg_card;
 }
 
 pub mod prelude {
     pub use crate::charts::glucose::{GlucoseGraphBuilder, LayoutConfig};
+    pub use crate::charts::bg_card::{BgCardBuilder, BgCardData, GlucoseStatus, SparklinePoint};
     #[cfg(feature = "cinnamon")]
     pub use crate::integrations::*;
     pub use crate::models::*;

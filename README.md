@@ -13,12 +13,6 @@ A sweet and simple Rust library for generating static diabetes data visualizatio
 ## Overview
 
 Bonbon is a fast, customizable graph rendering library designed for diabetes related data visualization. It supports glucose entries, insulin doses, carbohydrate intake, and manual blood glucose readings with configurable themes, units, and layout options.
-<p align="center">
-  <img src="assets/images/example_graph.png" alt="Example Glucose Graph" width="800">
-</p>
-
-> Note: For now the library only contains one single graph, so the README will be focused on it, but as soon as other graphs are introduced (for example time in range), the README will change to accomodate for all sorts of graphs. 
-
 
 ## Features
 
@@ -29,6 +23,33 @@ Bonbon is a fast, customizable graph rendering library designed for diabetes rel
 - **Dynamic Scaling**: Automatic Y-axis scaling based on glucose values
 - **Timezone Support**: Accurate time axis labels for any timezone
 - **Microbolus Filtering**: Configurable threshold to simplify SMB visualization
+- **BG Card**: Compact status card showing current glucose, trend, delta, IOB/COB, and a 3-hour sparkline
+
+---
+
+## Glucose Graph
+
+The Glucose Graph is a full-resolution chart rendering glucose entries over time, with optional treatment markers (insulin boluses, carbs, manual BG readings), configurable Y-axis scaling, timezone-aware time axis, and dual-unit support.
+
+<p align="center">
+  <img src="assets/images/example_graph.png" alt="Example Glucose Graph" width="800">
+</p>
+
+
+---
+
+## BG Card
+
+The BG Card is a compact 640×320 status card (scalable via `with_scale`) that renders current glucose, trend arrow, delta, age, IOB/COB, and a color-coded 3-hour sparkline with an ambient gradient fill.
+
+<p align="center">
+  <img src="assets/images/example_in_range_card.png" alt="BG Card - In Range" width="640">
+  <img src="assets/images/example_low_card.png" alt="BG Card - Low" width="640">
+</p>
+
+
+
+---
 
 ## Installation
 
@@ -61,6 +82,13 @@ rustflags = ["-C", "target-cpu=native"]
 ```
 
 ## Benchmarks
+
+### BG Card build time at 4× scale (2560×1280)
+Averaged across 8 rendering scenarios (InRange, High, Low, multi-status, mmol/L, flat sparkline, single point, no sparkline).
+
+| Hardware | Avg. build time |
+| --- | --- |
+| **Ryzen 5 9600x** | ~25.3ms |
 
 ### Graph build time (using native CPU compilation optimizations)
 | Benchmark Test | Resolution | Entries | Ryzen 5 9600x | Quad-core ARM Cortex-A72 |
