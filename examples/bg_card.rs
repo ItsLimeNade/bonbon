@@ -38,6 +38,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         iob_str: Some("IOB 2.5u".to_string()),
         cob_str: Some("COB 30g".to_string()),
         sparkline_points,
+        info_pill: Some(InfoPill {
+            icon: PillIcon::from_bytes(builtin_icons::WATER),
+            text: "Hydrate".to_string(),
+            state: PillState::Normal,
+        }),
     };
 
     let img = BgCardBuilder::new()

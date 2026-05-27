@@ -33,7 +33,10 @@ pub mod charts {
 
 pub mod prelude {
     pub use crate::charts::glucose::{GlucoseGraphBuilder, LayoutConfig};
-    pub use crate::charts::bg_card::{BgCardBuilder, BgCardData, GlucoseStatus, SparklinePoint};
+    pub use crate::charts::bg_card::{
+        builtin_icons, BgCardBuilder, BgCardData, GlucoseStatus, InfoPill, PillIcon, PillState,
+        SparklinePoint,
+    };
     #[cfg(feature = "cinnamon")]
     pub use crate::integrations::*;
     pub use crate::models::*;

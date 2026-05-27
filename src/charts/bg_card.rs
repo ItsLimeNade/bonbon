@@ -1,5 +1,8 @@
+use std::path::PathBuf;
+
 use ab_glyph::{FontRef, PxScale};
-use image::{Rgba, RgbaImage};
+use image::imageops::FilterType;
+use image::{DynamicImage, Rgba, RgbaImage};
 use imageproc::drawing::{draw_antialiased_line_segment_mut, draw_text_mut};
 
 use crate::theme::Theme;
@@ -10,6 +13,58 @@ pub enum GlucoseStatus {
     Low,
     InRange,
     High,
+}
+
+/// Visual state for [`InfoPill`]. Controls background + text color.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PillState {
+    /// Neutral state, blends in with the base theme.
+    Normal,
+    /// High-glucose alert, vivid `glucose_high` background with high-contrast text.
+    AlertHigh,
+    /// Low-glucose alert, vivid `glucose_low` background with high-contrast text.
+    AlertLow,
+}
+
+/// Source for the pill icon. Loaded lazily at build time and resized to a square
+/// matching the pill height. Non-square sources are stretched to fit.
+#[derive(Debug, Clone)]
+pub enum PillIcon {
+    /// Read the icon from a file path. Any format the `image` crate supports.
+    Path(PathBuf),
+    /// Decode the icon from raw image bytes (PNG, JPEG, ...).
+    Bytes(Vec<u8>),
+}
+
+impl PillIcon {
+    pub fn from_path<P: Into<PathBuf>>(path: P) -> Self {
+        Self::Path(path.into())
+    }
+
+    pub fn from_bytes<B: Into<Vec<u8>>>(bytes: B) -> Self {
+        Self::Bytes(bytes.into())
+    }
+}
+
+/// A small contextual badge rendered in the top-right of the card.
+///
+/// Composition is icon-on-left, text-on-right, both centered vertically.
+/// What you put inside is entirely up to you — the renderer only paints what's asked.
+#[derive(Debug, Clone)]
+pub struct InfoPill {
+    pub icon: PillIcon,
+    pub text: String,
+    pub state: PillState,
+}
+
+/// Built-in icon byte slices (PNG) bundled with the crate for quick use with
+/// [`PillIcon::from_bytes`]. All are 50x50 RGBA PNGs.
+pub mod builtin_icons {
+    pub const FAST_DROP: &[u8] = include_bytes!("../../assets/icons/fast_drop.png");
+    pub const FAST_RISE: &[u8] = include_bytes!("../../assets/icons/fast_rise.png");
+    pub const FINGERPRICK: &[u8] = include_bytes!("../../assets/icons/fingerprick.png");
+    pub const WARNING: &[u8] = include_bytes!("../../assets/icons/warning.png");
+    pub const WATER: &[u8] = include_bytes!("../../assets/icons/water.png");
 }
 
 /// A single data point in the 3-hour sparkline.
@@ -48,6 +103,8 @@ pub struct BgCardData {
     pub cob_str: Option<String>,
     /// Sparkline data for the last 3 hours, oldest first.
     pub sparkline_points: Vec<SparklinePoint>,
+    /// Optional contextual info pill rendered top-right under the time.
+    pub info_pill: Option<InfoPill>,
 }
 
 /// Builder for the card.
@@ -114,6 +171,10 @@ impl<'a> BgCardBuilder<'a> {
         draw_header(&mut img, &self.theme, &font, &data, w, s);
         draw_content(&mut img, &self.theme, &font, &data, w, s);
         draw_sparkline(&mut img, &self.theme, &data.sparkline_points, w, s);
+
+        if let Some(pill) = &data.info_pill {
+            draw_info_pill(&mut img, &self.theme, &font, pill, w, s)?;
+        }
 
         Ok(img)
     }
@@ -342,4 +403,171 @@ fn draw_sparkline(img: &mut RgbaImage, theme: &Theme, points: &[SparklinePoint],
             );
         }
     }
+}
+
+/// Returns `(background, text)` color for the pill, picked from the theme.
+fn pill_colors(theme: &Theme, state: PillState) -> (Rgba<u8>, Rgba<u8>) {
+    match state {
+        PillState::Normal => {
+            let c = theme.text_secondary;
+            (Rgba([c[0], c[1], c[2], 60]), theme.text_primary)
+        }
+        PillState::AlertHigh => {
+            let c = theme.glucose_high;
+            (Rgba([c[0], c[1], c[2], 240]), theme.background)
+        }
+        PillState::AlertLow => {
+            let c = theme.glucose_low;
+            (Rgba([c[0], c[1], c[2], 240]), theme.background)
+        }
+    }
+}
+
+/// Alpha-blends a filled rounded rectangle onto `img`.
+fn draw_filled_rounded_rect(
+    img: &mut RgbaImage,
+    x: i32,
+    y: i32,
+    w: u32,
+    h: u32,
+    radius: i32,
+    color: Rgba<u8>,
+) {
+    let img_w = img.width() as i32;
+    let img_h = img.height() as i32;
+    let w_i = w as i32;
+    let h_i = h as i32;
+    let r = radius.min(w_i / 2).min(h_i / 2).max(0);
+    let r2 = r * r;
+    let a = color[3] as f32 / 255.0;
+    let inv = 1.0 - a;
+
+    for row in 0..h_i {
+        for col in 0..w_i {
+            let px = x + col;
+            let py = y + row;
+            if px < 0 || py < 0 || px >= img_w || py >= img_h {
+                continue;
+            }
+
+            let in_left  = col < r;
+            let in_right = col >= w_i - r;
+            let in_top   = row < r;
+            let in_bot   = row >= h_i - r;
+
+            let inside = if in_left && in_top {
+                let dx = (r - 1) - col;
+                let dy = (r - 1) - row;
+                dx * dx + dy * dy <= r2
+            } else if in_right && in_top {
+                let dx = col - (w_i - r);
+                let dy = (r - 1) - row;
+                dx * dx + dy * dy <= r2
+            } else if in_left && in_bot {
+                let dx = (r - 1) - col;
+                let dy = row - (h_i - r);
+                dx * dx + dy * dy <= r2
+            } else if in_right && in_bot {
+                let dx = col - (w_i - r);
+                let dy = row - (h_i - r);
+                dx * dx + dy * dy <= r2
+            } else {
+                true
+            };
+
+            if inside {
+                let pixel = img.get_pixel_mut(px as u32, py as u32);
+                pixel.0 = [
+                    (color[0] as f32 * a + pixel.0[0] as f32 * inv) as u8,
+                    (color[1] as f32 * a + pixel.0[1] as f32 * inv) as u8,
+                    (color[2] as f32 * a + pixel.0[2] as f32 * inv) as u8,
+                    pixel.0[3],
+                ];
+            }
+        }
+    }
+}
+
+/// Resizes `icon_src` to `size × size` (Lanczos3) and alpha-blends it at `(x, y)`.
+fn draw_pill_icon(img: &mut RgbaImage, icon_src: &DynamicImage, x: i32, y: i32, size: u32) {
+    if size == 0 {
+        return;
+    }
+    let resized = icon_src.resize_exact(size, size, FilterType::Lanczos3);
+    let rgba = resized.to_rgba8();
+
+    let img_w = img.width() as i32;
+    let img_h = img.height() as i32;
+
+    for (sx, sy, pixel) in rgba.enumerate_pixels() {
+        let px = x + sx as i32;
+        let py = y + sy as i32;
+        if px < 0 || py < 0 || px >= img_w || py >= img_h {
+            continue;
+        }
+        let alpha = pixel.0[3] as f32 / 255.0;
+        if alpha == 0.0 {
+            continue;
+        }
+        let inv = 1.0 - alpha;
+        let dst = img.get_pixel_mut(px as u32, py as u32);
+        dst.0 = [
+            (pixel.0[0] as f32 * alpha + dst.0[0] as f32 * inv) as u8,
+            (pixel.0[1] as f32 * alpha + dst.0[1] as f32 * inv) as u8,
+            (pixel.0[2] as f32 * alpha + dst.0[2] as f32 * inv) as u8,
+            dst.0[3],
+        ];
+    }
+}
+
+/// Draws the info pill (rounded rect + icon + text) in the top-right of the card.
+fn draw_info_pill(
+    img: &mut RgbaImage,
+    theme: &Theme,
+    font: &FontRef,
+    pill: &InfoPill,
+    w: u32,
+    s: f32,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let header_cy = 23.0 * s;
+    let pill_h    = 30.0 * s;
+    let icon_size = 22.0 * s;
+    let font_h    = 18.0 * s;
+    let pill_pad  = 10.0 * s;
+    let icon_gap  = if pill.text.is_empty() { 0.0 } else { 7.0 * s };
+    let radius    = (pill_h / 2.0).round() as i32;
+
+    let icon_img = match &pill.icon {
+        PillIcon::Path(p) => image::open(p)?,
+        PillIcon::Bytes(b) => image::load_from_memory(b)?,
+    };
+
+    let text_w = approx_text_w(&pill.text, font_h);
+    let pill_w = pill_pad + icon_size + icon_gap + text_w + pill_pad;
+    let pill_x = (w as f32 - pill_w) / 2.0;
+    let pill_y = header_cy - pill_h / 2.0;
+
+    let (bg_color, text_color) = pill_colors(theme, pill.state);
+
+    draw_filled_rounded_rect(
+        img,
+        pill_x as i32,
+        pill_y as i32,
+        pill_w as u32,
+        pill_h as u32,
+        radius,
+        bg_color,
+    );
+
+    let icon_x = (pill_x + pill_pad) as i32;
+    let icon_y = (pill_y + (pill_h - icon_size) / 2.0) as i32;
+    draw_pill_icon(img, &icon_img, icon_x, icon_y, icon_size as u32);
+
+    if !pill.text.is_empty() {
+        let text_x = (pill_x + pill_pad + icon_size + icon_gap) as i32;
+        let text_y = (pill_y + (pill_h - font_h) / 2.0) as i32;
+        draw_text_mut(img, text_color, text_x, text_y, PxScale::from(font_h), font, &pill.text);
+    }
+
+    Ok(())
 }
