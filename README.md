@@ -103,3 +103,6 @@ Averaged across 8 rendering scenarios (InRange, High, Low, multi-status, mmol/L,
 ## License
 
 This project is licensed under the  MPL-2.0 License. See the [LICENSE](LICENSE) file for details.
+
+This project uses Material Icons by Google, licensed under the Apache License 2.0.
+https://github.com/google/material-design-icons

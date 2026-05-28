@@ -115,6 +115,8 @@ pub struct BgCardBuilder<'a> {
     theme: Theme,
     font: &'a [u8],
     scale: f32,
+    #[cfg(feature = "beetroot")]
+    sticker_set: Option<crate::charts::stickers::StickerSet>,
 }
 
 impl<'a> Default for BgCardBuilder<'a> {
@@ -131,7 +133,19 @@ impl<'a> BgCardBuilder<'a> {
             theme: Theme::dark(),
             font: DEFAULT_FONT,
             scale: 1.0,
+            #[cfg(feature = "beetroot")]
+            sticker_set: None,
         }
+    }
+
+    /// Attach a [`StickerSet`](crate::charts::stickers::StickerSet) to the card.
+    ///
+    /// Stickers are layered behind the header/content so text and the
+    /// sparkline remain on top. Only available with the `beetroot` feature.
+    #[cfg(feature = "beetroot")]
+    pub fn with_stickers(mut self, set: crate::charts::stickers::StickerSet) -> Self {
+        self.sticker_set = Some(set);
+        self
     }
 
     pub fn with_data(mut self, data: BgCardData) -> Self {
@@ -168,6 +182,14 @@ impl<'a> BgCardBuilder<'a> {
 
         draw_bg_pattern(&mut img, &self.theme, w, h, s);
         draw_gradient(&mut img, &self.theme, data.status, w, h);
+
+        #[cfg(feature = "beetroot")]
+        if let Some(set) = self.sticker_set.as_ref() {
+            use crate::charts::stickers;
+            let bounds = stickers::bounds_from(0.0, 0.0, w as f32, h as f32);
+            stickers::draw_on_card(&mut img, set, data.status, bounds);
+        }
+
         draw_header(&mut img, &self.theme, &font, &data, w, s);
         draw_content(&mut img, &self.theme, &font, &data, w, s);
         draw_sparkline(&mut img, &self.theme, &data.sparkline_points, w, s);

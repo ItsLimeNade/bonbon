@@ -3,39 +3,6 @@ use image::{Rgba, RgbaImage};
 use imageproc::drawing::{draw_filled_circle_mut, draw_polygon_mut, draw_text_mut};
 use imageproc::point::Point;
 
-/// Draws a dashed vertical line with a specific thickness.
-#[allow(clippy::too_many_arguments)]
-pub fn draw_dashed_vertical_line(
-    img: &mut RgbaImage,
-    x: f32,
-    y_start: f32,
-    y_end: f32,
-    color: Rgba<u8>,
-    dash_length: i32,
-    gap_length: i32,
-    thickness: i32,
-) {
-    let mut current_y = y_start as i32;
-    let end_y = y_end as i32;
-
-    let x_start = (x - (thickness as f32 / 2.0)).round() as i32;
-
-    while current_y < end_y {
-        let segment_h = dash_length.min(end_y - current_y);
-
-        draw_fast_rect(
-            img,
-            x_start,
-            current_y,
-            thickness as u32,
-            segment_h as u32,
-            color,
-        );
-
-        current_y += dash_length + gap_length;
-    }
-}
-
 /// Draws a dashed horizontal line with a specific thickness.
 #[allow(clippy::too_many_arguments)]
 pub fn draw_dashed_horizontal_line(

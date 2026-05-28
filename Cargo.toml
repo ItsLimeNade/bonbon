@@ -1,6 +1,6 @@
 [package]
 name = "bonbon"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2021"
 repository = "https://github.com/ItsLimeNade/bonbon"
 homepage = "https://github.com/ItsLimeNade/bonbon?tab=readme-ov-file"
@@ -32,6 +32,10 @@ cinnamon = "1.0.1"
 default = []
 cinnamon = ["dep:cinnamon"]
 beetroot = [] # reserved for future sticker/widget integrations
+
+[[example]]
+name = "stickers"
+required-features = ["beetroot"]
 
 [package.metadata.docs.rs]
 all-features = true

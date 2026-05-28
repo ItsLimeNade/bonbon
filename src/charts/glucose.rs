@@ -6,10 +6,10 @@ use crate::models::{
     UnitPreference,
 };
 use crate::theme::Theme;
-use crate::utils::color::darken_color;
+use crate::utils::color::{darken_color, lighten_color};
 use crate::utils::drawing::{
-    create_circle_sprite, draw_dashed_horizontal_line, draw_dashed_vertical_line, draw_fast_rect,
-    draw_smart_circle, draw_smart_triangle, draw_text_with_outline,
+    create_circle_sprite, draw_dashed_horizontal_line, draw_fast_rect, draw_smart_circle,
+    draw_smart_triangle, draw_text_with_outline,
 };
 
 use ab_glyph::{FontRef, PxScale};
@@ -100,6 +100,8 @@ pub struct GlucoseGraphBuilder<'a> {
     theme: Theme,
     font: &'a [u8],
     microbolus_threshold: f32,
+    #[cfg(feature = "beetroot")]
+    sticker_set: Option<crate::charts::stickers::StickerSet>,
 }
 
 impl<'a> Default for GlucoseGraphBuilder<'a> {
@@ -128,7 +130,19 @@ impl<'a> GlucoseGraphBuilder<'a> {
             theme: Theme::dark(),
             font: DEFAULT_FONT,
             microbolus_threshold: 0.0,
+            #[cfg(feature = "beetroot")]
+            sticker_set: None,
         }
+    }
+
+    /// Attach a [`StickerSet`](crate::charts::stickers::StickerSet) to the graph.
+    ///
+    /// Stickers are drawn behind the data points so the graph stays readable.
+    /// Only available with the `beetroot` feature.
+    #[cfg(feature = "beetroot")]
+    pub fn with_stickers(mut self, set: crate::charts::stickers::StickerSet) -> Self {
+        self.sticker_set = Some(set);
+        self
     }
 
     /// Sets the graph's entries to the given list, overwriting any existing ones.
@@ -314,6 +328,8 @@ impl<'a> GlucoseGraphBuilder<'a> {
         };
 
         // Pretty self-explanatory, helper functions to render the graphics.
+        // Gridlines first, target lines on top, keeps target colors vivid.
+        self.draw_value_gridlines(&mut img, &ctx);
         self.draw_target_lines(&mut img, &ctx);
         self.draw_date_separators(&mut img, &ctx);
         self.draw_time_axis(&mut img, &ctx);
@@ -324,10 +340,45 @@ impl<'a> GlucoseGraphBuilder<'a> {
         let visible_treatments = self.get_visible_treatments(start_time, end_time);
         self.draw_treatments(&mut img, &ctx, &visible_treatments);
 
+        // Stickers go behind entries so the readings stay clear on top.
+        #[cfg(feature = "beetroot")]
+        self.draw_stickers(&mut img, &ctx, visible_entries_slice);
+
         // Draw entries last so they appear on top, making for a clear view of the graph.
         self.draw_entries(&mut img, &ctx, visible_entries_slice);
 
         Ok(img)
+    }
+
+    /// Hands off to the `stickers` module. Behind the `beetroot` feature so
+    /// non-users carry zero overhead in their build.
+    #[cfg(feature = "beetroot")]
+    fn draw_stickers(
+        &self,
+        img: &mut RgbaImage,
+        ctx: &RenderContext,
+        entries: &[GraphEntry],
+    ) {
+        use crate::charts::stickers;
+        let Some(set) = self.sticker_set.as_ref() else {
+            return;
+        };
+        let bounds = stickers::bounds_from(
+            ctx.viewport.plot_left,
+            ctx.viewport.plot_top,
+            ctx.viewport.plot_right,
+            ctx.viewport.plot_bottom,
+        );
+        stickers::draw_on_graph(
+            img,
+            set,
+            entries,
+            bounds,
+            &|t| ctx.project_x(t),
+            &|sgv| ctx.project_y(sgv),
+            self.target_low,
+            self.target_high,
+        );
     }
 
     /// Private helper function used to calculate the graph's view port and help
@@ -458,6 +509,32 @@ impl<'a> GlucoseGraphBuilder<'a> {
         }
     }
 
+    /// Draws solid horizontal gridlines at each Y-axis value tick so readings
+    /// can be eyeballed against a clear reference grid. Step count mirrors
+    /// [`draw_labels_and_units`] so lines and labels stay in lockstep.
+    ///
+    /// Stripe color is a darkened background and subtle "shadow" rather than
+    /// a bright overlay, so it never competes with the data points.
+    fn draw_value_gridlines(&self, img: &mut RgbaImage, ctx: &RenderContext) {
+        let steps = 6;
+        let step_size = (ctx.y_max - ctx.y_min) / (steps as f32);
+        let grid_thickness = (1.0 * ctx.viewport.s).ceil() as u32;
+        let stripe_color = lighten_color(self.theme.background, 0.08);
+
+        for i in 0..=steps {
+            let val = ctx.y_min + (i as f32 * step_size);
+            let y = ctx.project_y(val);
+            draw_fast_rect(
+                img,
+                ctx.viewport.plot_left as i32,
+                (y - grid_thickness as f32 / 2.0).round() as i32,
+                ctx.viewport.plot_w as u32,
+                grid_thickness,
+                stripe_color,
+            );
+        }
+    }
+
     /// Private helper function that draws the target on the graph.
     /// Automatically adapts it's thickness to the graph's size.
     fn draw_target_lines(&self, img: &mut RgbaImage, ctx: &RenderContext) {
@@ -501,15 +578,12 @@ impl<'a> GlucoseGraphBuilder<'a> {
         );
     }
 
-    /// Private helper function that draws dashed date separators on the graph when the date
-    /// changes.
+    /// Draws the inline "DD/MM" label whenever the date rolls over inside the window.
+    /// No vertical separator line, the date is just a small inline annotation.
     fn draw_date_separators(&self, img: &mut RgbaImage, ctx: &RenderContext) {
         let local_start = ctx.start_time.with_timezone(&self.timezone);
         let local_end = ctx.end_time.with_timezone(&self.timezone);
         let font_size_sm = (24.0 + 1.0) * ctx.viewport.s;
-        let grid_dash = (6.0 * ctx.viewport.s) as i32;
-        let grid_thickness = (1.0 * ctx.viewport.s).ceil() as i32;
-        let separator_thickness = (grid_thickness as f32 * 1.5).ceil() as i32 + 1;
 
         let mut pointer = local_start
             .date_naive()
@@ -524,17 +598,6 @@ impl<'a> GlucoseGraphBuilder<'a> {
         while pointer <= local_end {
             let x = ctx.project_x(pointer.with_timezone(&Utc));
             if x >= ctx.viewport.plot_left && x <= ctx.viewport.plot_right {
-                draw_dashed_vertical_line(
-                    img,
-                    x,
-                    ctx.viewport.plot_top,
-                    ctx.viewport.plot_bottom,
-                    self.theme.axis_lines,
-                    grid_dash,
-                    grid_dash,
-                    separator_thickness,
-                );
-
                 let date_str = pointer.format("%d/%m").to_string();
                 let tx = (x + 5.0 * ctx.viewport.s) as i32;
                 let ty = (ctx.viewport.plot_top + 5.0 * ctx.viewport.s) as i32;
@@ -553,14 +616,13 @@ impl<'a> GlucoseGraphBuilder<'a> {
         }
     }
 
-    /// Private helper function that draws the time axis onto the graph.
+    /// Draws the time tick labels along the X axis. No vertical gridlines,
+    /// horizontal value gridlines (see [`draw_value_gridlines`]) carry the eye instead.
     fn draw_time_axis(&self, img: &mut RgbaImage, ctx: &RenderContext) {
         if let TimeAxisMode::EquallyDistributed { count } = self.time_axis_mode {
             let step_secs = ctx.time_span_secs / (count as f32);
             let font_size_sm = (24.0 + 1.0) * ctx.viewport.s;
             let font_size_xs = (20.0 + 1.0) * ctx.viewport.s;
-            let grid_dash = (6.0 * ctx.viewport.s) as i32;
-            let grid_thickness = (1.0 * ctx.viewport.s).ceil() as i32;
 
             for i in 0..=count {
                 let offset = i as f32 * step_secs;
@@ -571,17 +633,6 @@ impl<'a> GlucoseGraphBuilder<'a> {
                 if x > ctx.viewport.plot_right + 1.0 {
                     continue;
                 }
-
-                draw_dashed_vertical_line(
-                    img,
-                    x,
-                    ctx.viewport.plot_top,
-                    ctx.viewport.plot_bottom,
-                    self.theme.grid_major,
-                    grid_dash,
-                    grid_dash,
-                    grid_thickness,
-                );
 
                 let local_time = tick_time.with_timezone(&self.timezone);
                 let time_str = local_time.format("%H:%M").to_string();

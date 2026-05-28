@@ -29,6 +29,8 @@ mod utils {
 pub mod charts {
     pub mod glucose;
     pub mod bg_card;
+    #[cfg(feature = "beetroot")]
+    pub mod stickers;
 }
 
 pub mod prelude {
@@ -37,6 +39,8 @@ pub mod prelude {
         builtin_icons, BgCardBuilder, BgCardData, GlucoseStatus, InfoPill, PillIcon, PillState,
         SparklinePoint,
     };
+    #[cfg(feature = "beetroot")]
+    pub use crate::charts::stickers::{Sticker, StickerCategory, StickerSet, StickerSource};
     #[cfg(feature = "cinnamon")]
     pub use crate::integrations::*;
     pub use crate::models::*;
