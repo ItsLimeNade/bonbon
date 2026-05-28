@@ -63,6 +63,7 @@ pub struct StickerSet {
     pub seed: Option<u64>,
     pub fast_rate_threshold: f32,
     pub current_rate: Option<f32>,
+    pub graph_size_ratio: f32,
 }
 
 impl Default for StickerSet {
@@ -73,6 +74,7 @@ impl Default for StickerSet {
             seed: None,
             fast_rate_threshold: 2.0,
             current_rate: None,
+            graph_size_ratio: 1.0 / 6.0,
         }
     }
 }
@@ -114,6 +116,15 @@ impl StickerSet {
     /// stickers fire when `|current_rate| >= fast_rate_threshold`.
     pub fn with_current_rate(mut self, rate: f32) -> Self {
         self.current_rate = Some(rate);
+        self
+    }
+
+    /// On-**graph** sticker size, expressed as a fraction of the smaller
+    /// plot dimension. Default: `1.0 / 6.0` (≈16% of plot height for a
+    /// landscape chart). Clamped to a sane range to avoid 0-size or
+    /// canvas-eating stickers.
+    pub fn with_graph_size_ratio(mut self, ratio: f32) -> Self {
+        self.graph_size_ratio = ratio;
         self
     }
 }
@@ -208,9 +219,26 @@ fn resize_sticker(src: &DynamicImage, size: u32) -> DynamicImage {
 
 fn rotate_sticker(src: &DynamicImage, angle_rad: f32) -> DynamicImage {
     use imageproc::geometric_transformations::{rotate_about_center, Interpolation};
-    let rgba = src.to_rgba8();
+
+    let src_rgba = src.to_rgba8();
+    let w = src_rgba.width();
+    let h = src_rgba.height();
+
+    let pad_w = ((w as f32) * std::f32::consts::SQRT_2).ceil() as u32;
+    let pad_h = ((h as f32) * std::f32::consts::SQRT_2).ceil() as u32;
+    let ox = (pad_w - w) / 2;
+    let oy = (pad_h - h) / 2;
+
+    let mut padded = RgbaImage::from_pixel(pad_w, pad_h, Rgba([0, 0, 0, 0]));
+    for y in 0..h {
+        for x in 0..w {
+            let px = *src_rgba.get_pixel(x, y);
+            padded.put_pixel(ox + x, oy + y, px);
+        }
+    }
+
     let rotated = rotate_about_center(
-        &rgba,
+        &padded,
         angle_rad,
         Interpolation::Bilinear,
         Rgba([0, 0, 0, 0]),
@@ -359,7 +387,10 @@ pub(crate) fn draw_on_graph(
     let index = CategoryIndex::build(set);
     let mut rng = Rng::new(set.seed.unwrap_or_else(random_seed));
 
-    let sticker_size = (bounds.w().min(bounds.h()) / 6.0).max(8.0).round() as u32;
+    let ratio = set.graph_size_ratio.clamp(0.01, 0.5);
+    let sticker_size = (bounds.w().min(bounds.h()) * ratio)
+        .max(8.0)
+        .round() as u32;
     let half = sticker_size as f32 / 2.0;
     let plot_w = bounds.w();
     let plot_h = bounds.h();
