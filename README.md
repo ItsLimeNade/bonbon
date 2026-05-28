@@ -44,7 +44,7 @@ The BG Card is a compact 640×320 status card (scalable via `with_scale`) that r
 
 <p align="center">
   <img src="assets/images/example_in_range_card.png" alt="BG Card - In Range" width="640">
-  <img src="assets/images/example_low_card.png" alt="BG Card - Low" width="640">
+  <img src="assets/images/example_low_pill.png" alt="BG Card - Low" width="640">
 </p>
 
 
