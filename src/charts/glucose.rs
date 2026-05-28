@@ -353,12 +353,7 @@ impl<'a> GlucoseGraphBuilder<'a> {
     /// Hands off to the `stickers` module. Behind the `beetroot` feature so
     /// non-users carry zero overhead in their build.
     #[cfg(feature = "beetroot")]
-    fn draw_stickers(
-        &self,
-        img: &mut RgbaImage,
-        ctx: &RenderContext,
-        entries: &[GraphEntry],
-    ) {
+    fn draw_stickers(&self, img: &mut RgbaImage, ctx: &RenderContext, entries: &[GraphEntry]) {
         use crate::charts::stickers;
         let Some(set) = self.sticker_set.as_ref() else {
             return;
@@ -785,7 +780,7 @@ impl<'a> GlucoseGraphBuilder<'a> {
         for i in 0..=steps {
             let val = ctx.y_min + (i as f32 * step_size);
             let y_pos = ctx.project_y(val);
-            
+
             let (main_text, sub_text) = match self.unit_display {
                 UnitDisplay::MgDl => {
                     let rounded = (val / 10.0).ceil() * 10.0;
@@ -798,7 +793,10 @@ impl<'a> GlucoseGraphBuilder<'a> {
                 UnitDisplay::Dual { primary } => match primary {
                     UnitPreference::MgDl => {
                         let rounded = (val / 10.0).ceil() * 10.0;
-                        (format!("{:.0}", rounded), Some(format!("{:.1}", val / 18.0)))
+                        (
+                            format!("{:.0}", rounded),
+                            Some(format!("{:.1}", val / 18.0)),
+                        )
                     }
                     UnitPreference::MmolL => {
                         let rounded = ((val / 18.0) * 2.0).ceil() / 2.0;

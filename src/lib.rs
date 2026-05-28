@@ -27,18 +27,18 @@ mod utils {
     pub mod drawing;
 }
 pub mod charts {
-    pub mod glucose;
     pub mod bg_card;
+    pub mod glucose;
     #[cfg(feature = "beetroot")]
     pub mod stickers;
 }
 
 pub mod prelude {
-    pub use crate::charts::glucose::{GlucoseGraphBuilder, LayoutConfig};
     pub use crate::charts::bg_card::{
         builtin_icons, BgCardBuilder, BgCardData, GlucoseStatus, InfoPill, PillIcon, PillState,
         SparklinePoint,
     };
+    pub use crate::charts::glucose::{GlucoseGraphBuilder, LayoutConfig};
     #[cfg(feature = "beetroot")]
     pub use crate::charts::stickers::{Sticker, StickerCategory, StickerSet, StickerSource};
     #[cfg(feature = "cinnamon")]

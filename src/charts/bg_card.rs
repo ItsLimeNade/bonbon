@@ -171,7 +171,9 @@ impl<'a> BgCardBuilder<'a> {
 
     /// Renders and returns the card image at `640*scale × 320*scale` pixels.
     pub fn build(self) -> Result<RgbaImage, Box<dyn std::error::Error>> {
-        let data = self.data.ok_or("BgCardData is required - call with_data() first")?;
+        let data = self
+            .data
+            .ok_or("BgCardData is required - call with_data() first")?;
         let font = FontRef::try_from_slice(self.font)?;
         let s = self.scale;
 
@@ -263,50 +265,106 @@ fn draw_gradient(img: &mut RgbaImage, theme: &Theme, status: GlucoseStatus, w: u
 }
 
 /// Draws the header: Watermark label on the left, current time on the right.
-fn draw_header(img: &mut RgbaImage, theme: &Theme, font: &FontRef, data: &BgCardData, w: u32, s: f32) {
-    let cy     = 23.0 * s;
-    let pad    = 24.0 * s;
+fn draw_header(
+    img: &mut RgbaImage,
+    theme: &Theme,
+    font: &FontRef,
+    data: &BgCardData,
+    w: u32,
+    s: f32,
+) {
+    let cy = 23.0 * s;
+    let pad = 24.0 * s;
     let font_h = 22.0 * s;
 
     let label_y = (cy - font_h / 2.0) as i32;
-    draw_text_mut(img, theme.text_primary, pad as i32, label_y,
-        PxScale::from(font_h), font, &data.watermark_str);
+    draw_text_mut(
+        img,
+        theme.text_primary,
+        pad as i32,
+        label_y,
+        PxScale::from(font_h),
+        font,
+        &data.watermark_str,
+    );
 
     let tw = approx_text_w(&data.time_str, font_h);
     let tx = (w as f32 - pad - tw) as i32;
     let ty = (cy - font_h / 2.0) as i32;
-    draw_text_mut(img, theme.text_secondary, tx, ty,
-        PxScale::from(font_h), font, &data.time_str);
+    draw_text_mut(
+        img,
+        theme.text_secondary,
+        tx,
+        ty,
+        PxScale::from(font_h),
+        font,
+        &data.time_str,
+    );
 }
 
 /// Draws the main content zone: age, SGV + trend, unit, delta, IOB, COB.
-fn draw_content(img: &mut RgbaImage, theme: &Theme, font: &FontRef, data: &BgCardData, w: u32, s: f32) {
-    let pad          = 24.0 * s;
-    let font_age     = 16.0 * s;
-    let font_sgv     = 76.0 * s;
-    let font_unit    = 16.0 * s;
-    let font_delta   = 21.0 * s;
+fn draw_content(
+    img: &mut RgbaImage,
+    theme: &Theme,
+    font: &FontRef,
+    data: &BgCardData,
+    w: u32,
+    s: f32,
+) {
+    let pad = 24.0 * s;
+    let font_age = 16.0 * s;
+    let font_sgv = 76.0 * s;
+    let font_unit = 16.0 * s;
+    let font_delta = 21.0 * s;
     let font_iob_cob = 30.0 * s;
-    let age_y        = 62.0 * s;
+    let age_y = 62.0 * s;
 
-    let sgv_y   = age_y + font_age + 4.0 * s;
-    let unit_y  = sgv_y + font_sgv + 3.0 * s;
+    let sgv_y = age_y + font_age + 4.0 * s;
+    let unit_y = sgv_y + font_sgv + 3.0 * s;
     let delta_y = unit_y + font_unit + 4.0 * s;
-    let iob_y   = sgv_y;
-    let cob_y   = iob_y + font_iob_cob + 6.0 * s;
+    let iob_y = sgv_y;
+    let cob_y = iob_y + font_iob_cob + 6.0 * s;
 
-    draw_text_mut(img, theme.text_secondary, pad as i32, age_y as i32,
-        PxScale::from(font_age), font, &data.age_str);
+    draw_text_mut(
+        img,
+        theme.text_secondary,
+        pad as i32,
+        age_y as i32,
+        PxScale::from(font_age),
+        font,
+        &data.age_str,
+    );
 
     let value_str = format!("{:.0} {}", data.current_sgv, data.trend_arrow);
-    draw_text_mut(img, status_color(theme, data.status), pad as i32, sgv_y as i32,
-        PxScale::from(font_sgv), font, &value_str);
+    draw_text_mut(
+        img,
+        status_color(theme, data.status),
+        pad as i32,
+        sgv_y as i32,
+        PxScale::from(font_sgv),
+        font,
+        &value_str,
+    );
 
-    draw_text_mut(img, theme.text_dim, pad as i32, unit_y as i32,
-        PxScale::from(font_unit), font, &data.unit_str);
+    draw_text_mut(
+        img,
+        theme.text_dim,
+        pad as i32,
+        unit_y as i32,
+        PxScale::from(font_unit),
+        font,
+        &data.unit_str,
+    );
 
-    draw_text_mut(img, theme.text_primary, pad as i32, delta_y as i32,
-        PxScale::from(font_delta), font, &data.delta_str);
+    draw_text_mut(
+        img,
+        theme.text_primary,
+        pad as i32,
+        delta_y as i32,
+        PxScale::from(font_delta),
+        font,
+        &data.delta_str,
+    );
 
     let x_right = w as f32 - pad;
     let gap = approx_text_w(" ", font_iob_cob);
@@ -320,32 +378,60 @@ fn draw_content(img: &mut RgbaImage, theme: &Theme, font: &FontRef, data: &BgCar
         .map(|(_, v)| approx_text_w(v, font_iob_cob))
         .fold(0.0_f32, f32::max);
 
-    let val_x   = (x_right - max_val_w) as i32;
+    let val_x = (x_right - max_val_w) as i32;
     let label_x = (x_right - max_val_w - gap - approx_text_w("IOB", font_iob_cob)) as i32;
 
     if let Some((label, value)) = iob_parts {
-        draw_text_mut(img, theme.text_secondary, label_x, iob_y as i32,
-            PxScale::from(font_iob_cob), font, label);
-        draw_text_mut(img, theme.text_secondary, val_x, iob_y as i32,
-            PxScale::from(font_iob_cob), font, value);
+        draw_text_mut(
+            img,
+            theme.text_secondary,
+            label_x,
+            iob_y as i32,
+            PxScale::from(font_iob_cob),
+            font,
+            label,
+        );
+        draw_text_mut(
+            img,
+            theme.text_secondary,
+            val_x,
+            iob_y as i32,
+            PxScale::from(font_iob_cob),
+            font,
+            value,
+        );
     }
 
     if let Some((label, value)) = cob_parts {
-        draw_text_mut(img, theme.text_secondary, label_x, cob_y as i32,
-            PxScale::from(font_iob_cob), font, label);
-        draw_text_mut(img, theme.text_secondary, val_x, cob_y as i32,
-            PxScale::from(font_iob_cob), font, value);
+        draw_text_mut(
+            img,
+            theme.text_secondary,
+            label_x,
+            cob_y as i32,
+            PxScale::from(font_iob_cob),
+            font,
+            label,
+        );
+        draw_text_mut(
+            img,
+            theme.text_secondary,
+            val_x,
+            cob_y as i32,
+            PxScale::from(font_iob_cob),
+            font,
+            value,
+        );
     }
 }
 
 /// Draws the colored sparkline in the bottom zone with a gradient fill underneath.
 fn draw_sparkline(img: &mut RgbaImage, theme: &Theme, points: &[SparklinePoint], w: u32, s: f32) {
-    let zone_top  = 224.0 * s;
-    let zone_h    = 66.0  * s;
-    let thickness = (3.0  * s).round() as i32;
-    let grad_h    = 40.0  * s;
-    let plot_w    = w as f32;
-    let bottom_y  = zone_top + zone_h;
+    let zone_top = 224.0 * s;
+    let zone_h = 66.0 * s;
+    let thickness = (3.0 * s).round() as i32;
+    let grad_h = 40.0 * s;
+    let plot_w = w as f32;
+    let bottom_y = zone_top + zone_h;
 
     if points.len() < 2 {
         return;
@@ -377,7 +463,11 @@ fn draw_sparkline(img: &mut RgbaImage, theme: &Theme, points: &[SparklinePoint],
         };
 
         for col in col_start..col_end {
-            let frac = if x1 > x0 { (col as f32 - x0) / (x1 - x0) } else { 0.0 };
+            let frac = if x1 > x0 {
+                (col as f32 - x0) / (x1 - x0)
+            } else {
+                0.0
+            };
             let curve_y = map_y(p0.sgv + frac * (p1.sgv - p0.sgv));
             let fill_top = (curve_y as i32).max(0) as u32;
             let fill_bot = ((curve_y + grad_h) as i32).min(img_h as i32) as u32;
@@ -472,10 +562,10 @@ fn draw_filled_rounded_rect(
                 continue;
             }
 
-            let in_left  = col < r;
+            let in_left = col < r;
             let in_right = col >= w_i - r;
-            let in_top   = row < r;
-            let in_bot   = row >= h_i - r;
+            let in_top = row < r;
+            let in_bot = row >= h_i - r;
 
             let inside = if in_left && in_top {
                 let dx = (r - 1) - col;
@@ -552,12 +642,12 @@ fn draw_info_pill(
     s: f32,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let header_cy = 23.0 * s;
-    let pill_h    = 30.0 * s;
+    let pill_h = 30.0 * s;
     let icon_size = 22.0 * s;
-    let font_h    = 18.0 * s;
-    let pill_pad  = 10.0 * s;
-    let icon_gap  = if pill.text.is_empty() { 0.0 } else { 7.0 * s };
-    let radius    = (pill_h / 2.0).round() as i32;
+    let font_h = 18.0 * s;
+    let pill_pad = 10.0 * s;
+    let icon_gap = if pill.text.is_empty() { 0.0 } else { 7.0 * s };
+    let radius = (pill_h / 2.0).round() as i32;
 
     let icon_img = match &pill.icon {
         PillIcon::Path(p) => image::open(p)?,
@@ -588,7 +678,15 @@ fn draw_info_pill(
     if !pill.text.is_empty() {
         let text_x = (pill_x + pill_pad + icon_size + icon_gap) as i32;
         let text_y = (pill_y + (pill_h - font_h) / 2.0) as i32;
-        draw_text_mut(img, text_color, text_x, text_y, PxScale::from(font_h), font, &pill.text);
+        draw_text_mut(
+            img,
+            text_color,
+            text_x,
+            text_y,
+            PxScale::from(font_h),
+            font,
+            &pill.text,
+        );
     }
 
     Ok(())

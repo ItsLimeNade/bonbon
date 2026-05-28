@@ -55,7 +55,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let file = File::create(filename)?;
     let mut writer = BufWriter::new(file);
     PngEncoder::new_with_quality(&mut writer, CompressionType::Level(6), FilterType::NoFilter)
-        .write_image(img.as_raw(), img.width(), img.height(), ExtendedColorType::Rgba8)?;
+        .write_image(
+            img.as_raw(),
+            img.width(),
+            img.height(),
+            ExtendedColorType::Rgba8,
+        )?;
 
     println!("Saved → {}", filename);
     Ok(())

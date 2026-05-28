@@ -68,7 +68,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .with_stickers(stickers.clone())
         .build()?;
 
-    write_png("stickers_graph.png", graph.as_raw(), graph.width(), graph.height())?;
+    write_png(
+        "stickers_graph.png",
+        graph.as_raw(),
+        graph.width(),
+        graph.height(),
+    )?;
     println!("Saved -> stickers_graph.png");
 
     let card_data = BgCardData {
@@ -101,15 +106,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .with_stickers(card_stickers)
         .build()?;
 
-    write_png("stickers_card.png", card.as_raw(), card.width(), card.height())?;
+    write_png(
+        "stickers_card.png",
+        card.as_raw(),
+        card.width(),
+        card.height(),
+    )?;
     println!("Saved -> stickers_card.png");
 
     Ok(())
 }
 
 fn solid_png(rgba: [u8; 4], size: u32) -> Vec<u8> {
-    let buf: ImageBuffer<Rgba<u8>, Vec<u8>> =
-        ImageBuffer::from_fn(size, size, |_, _| Rgba(rgba));
+    let buf: ImageBuffer<Rgba<u8>, Vec<u8>> = ImageBuffer::from_fn(size, size, |_, _| Rgba(rgba));
     let mut bytes = Vec::new();
     PngEncoder::new_with_quality(&mut bytes, CompressionType::Fast, FilterType::NoFilter)
         .write_image(buf.as_raw(), size, size, ExtendedColorType::Rgba8)

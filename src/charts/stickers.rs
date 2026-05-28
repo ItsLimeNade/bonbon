@@ -118,16 +118,13 @@ impl StickerSet {
     }
 }
 
-
 pub(crate) struct Rng {
     state: u64,
 }
 
 impl Rng {
     pub(crate) fn new(seed: u64) -> Self {
-        Self {
-            state: seed.max(1),
-        }
+        Self { state: seed.max(1) }
     }
 
     fn next_u64(&mut self) -> u64 {
@@ -201,7 +198,6 @@ fn min_sq_dist_to(points: &[(f32, f32)], x: f32, y: f32) -> f32 {
     }
     best
 }
-
 
 fn resize_sticker(src: &DynamicImage, size: u32) -> DynamicImage {
     if size == 0 {
@@ -292,7 +288,10 @@ impl CategoryIndex {
     }
 
     fn has(&self, cat: StickerCategory) -> bool {
-        self.by_cat.get(&cat).map(|v| !v.is_empty()).unwrap_or(false)
+        self.by_cat
+            .get(&cat)
+            .map(|v| !v.is_empty())
+            .unwrap_or(false)
     }
 }
 
@@ -319,7 +318,14 @@ fn rate_at(entries: &[GraphEntry], i: usize) -> f32 {
     let here = &entries[i];
     let mut best_rate = 0.0_f32;
     let mut best_abs = 0.0_f32;
-    for &j in &[i.checked_sub(1), if i + 1 < entries.len() { Some(i + 1) } else { None }] {
+    for &j in &[
+        i.checked_sub(1),
+        if i + 1 < entries.len() {
+            Some(i + 1)
+        } else {
+            None
+        },
+    ] {
         let Some(j) = j else { continue };
         let other = &entries[j];
         let mins = (other.date - here.date).num_seconds() as f32 / 60.0;
@@ -569,7 +575,6 @@ pub(crate) fn draw_on_card(
     let base_size = (bounds.w().min(bounds.h()) / 4.0).max(16.0);
 
     for _ in 0..set.limit {
-
         let weights: Vec<(StickerCategory, f32)> = allowed
             .iter()
             .map(|c| (*c, 1.0 + rng.range(0.0, 0.3)))
@@ -597,7 +602,7 @@ pub(crate) fn draw_on_card(
         let h = rotated.height() as f32;
         let half_w = w / 2.0;
         let half_h = h / 2.0;
-       
+
         let bleed = 0.15;
         let x = rng.range(
             bounds.left + half_w * (1.0 - bleed),
