@@ -388,9 +388,7 @@ pub(crate) fn draw_on_graph(
     let mut rng = Rng::new(set.seed.unwrap_or_else(random_seed));
 
     let ratio = set.graph_size_ratio.clamp(0.01, 0.5);
-    let sticker_size = (bounds.w().min(bounds.h()) * ratio)
-        .max(8.0)
-        .round() as u32;
+    let sticker_size = (bounds.w().min(bounds.h()) * ratio).max(8.0).round() as u32;
     let half = sticker_size as f32 / 2.0;
     let plot_w = bounds.w();
     let plot_h = bounds.h();
