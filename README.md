@@ -67,7 +67,7 @@ Add Bonbon to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-bonbon = "0.2"
+bonbon = "0.4"
 ```
 ## Examples & Docs
 Some usage examples can be found in the `bonbon/examples` directory.
