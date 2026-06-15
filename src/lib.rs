@@ -31,6 +31,7 @@ pub mod charts {
     pub mod glucose;
     #[cfg(feature = "beetroot")]
     pub mod stickers;
+    pub mod time_in_range;
 }
 
 pub mod prelude {
@@ -41,6 +42,7 @@ pub mod prelude {
     pub use crate::charts::glucose::{GlucoseGraphBuilder, LayoutConfig};
     #[cfg(feature = "beetroot")]
     pub use crate::charts::stickers::{Sticker, StickerCategory, StickerSet, StickerSource};
+    pub use crate::charts::time_in_range::{TimeInRangeBuilder, TirBand, TirStats, TirThresholds};
     #[cfg(feature = "cinnamon")]
     pub use crate::integrations::*;
     pub use crate::models::*;

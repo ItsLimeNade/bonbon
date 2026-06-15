@@ -37,6 +37,17 @@ pub struct Theme {
     pub glucose_reading_outline: Rgba<u8>,
 }
 
+macro_rules! builtin_theme {
+    ($(#[$doc:meta])* $fn_name:ident, $file:literal) => {
+        $(#[$doc])*
+        pub fn $fn_name() -> Self {
+            let json = include_str!(concat!("./themes/", $file, ".json"));
+            serde_json::from_str(json)
+                .unwrap_or_else(|e| panic!("Built-in theme `{}` is invalid JSON: {e}", $file))
+        }
+    };
+}
+
 impl Theme {
     pub fn dark() -> Self {
         let json = include_str!("./themes/beetroot_dark.json");
@@ -46,6 +57,37 @@ impl Theme {
     pub fn light() -> Self {
         let json = include_str!("./themes/beetroot_light.json");
         serde_json::from_str(json).expect("Built-in light theme is invalid JSON")
+    }
+
+    builtin_theme!(
+        licorice_dark,
+        "licorice_dark"
+    );
+    builtin_theme!(
+        watermelon_dark,
+        "watermelon_dark"
+    );
+
+    // --- Light themes -------------------------------------------------------
+
+    builtin_theme!(
+        paper_light,
+        "paper_light"
+    );
+    builtin_theme!(
+        ube_light,
+        "ube_light"
+    );
+
+    pub fn builtins() -> Vec<(&'static str, Theme)> {
+        vec![
+            ("beetroot_dark", Self::dark()),
+            ("licorice_dark", Self::licorice_dark()),
+            ("watermelon_dark", Self::watermelon_dark()),
+            ("beetroot_light", Self::light()),
+            ("paper_light", Self::paper_light()),
+            ("ube_light", Self::ube_light()),
+        ]
     }
 
     /// Load a custom theme from a file path

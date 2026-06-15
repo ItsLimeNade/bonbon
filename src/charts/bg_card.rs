@@ -6,6 +6,7 @@ use image::{DynamicImage, Rgba, RgbaImage};
 use imageproc::drawing::{draw_antialiased_line_segment_mut, draw_text_mut};
 
 use crate::theme::Theme;
+use crate::utils::drawing::draw_filled_rounded_rect;
 
 /// Glucose status used for gradient color, main value color, and sparkline segment colors.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -49,7 +50,7 @@ impl PillIcon {
 /// A small contextual badge rendered in the top-right of the card.
 ///
 /// Composition is icon-on-left, text-on-right, both centered vertically.
-/// What you put inside is entirely up to you — the renderer only paints what's asked.
+/// What you put inside is entirely up to you.
 #[derive(Debug, Clone)]
 pub struct InfoPill {
     pub icon: PillIcon,
@@ -531,71 +532,6 @@ fn pill_colors(theme: &Theme, state: PillState) -> (Rgba<u8>, Rgba<u8>) {
         PillState::AlertLow => {
             let c = theme.glucose_low;
             (Rgba([c[0], c[1], c[2], 240]), theme.background)
-        }
-    }
-}
-
-/// Alpha-blends a filled rounded rectangle onto `img`.
-fn draw_filled_rounded_rect(
-    img: &mut RgbaImage,
-    x: i32,
-    y: i32,
-    w: u32,
-    h: u32,
-    radius: i32,
-    color: Rgba<u8>,
-) {
-    let img_w = img.width() as i32;
-    let img_h = img.height() as i32;
-    let w_i = w as i32;
-    let h_i = h as i32;
-    let r = radius.min(w_i / 2).min(h_i / 2).max(0);
-    let r2 = r * r;
-    let a = color[3] as f32 / 255.0;
-    let inv = 1.0 - a;
-
-    for row in 0..h_i {
-        for col in 0..w_i {
-            let px = x + col;
-            let py = y + row;
-            if px < 0 || py < 0 || px >= img_w || py >= img_h {
-                continue;
-            }
-
-            let in_left = col < r;
-            let in_right = col >= w_i - r;
-            let in_top = row < r;
-            let in_bot = row >= h_i - r;
-
-            let inside = if in_left && in_top {
-                let dx = (r - 1) - col;
-                let dy = (r - 1) - row;
-                dx * dx + dy * dy <= r2
-            } else if in_right && in_top {
-                let dx = col - (w_i - r);
-                let dy = (r - 1) - row;
-                dx * dx + dy * dy <= r2
-            } else if in_left && in_bot {
-                let dx = (r - 1) - col;
-                let dy = row - (h_i - r);
-                dx * dx + dy * dy <= r2
-            } else if in_right && in_bot {
-                let dx = col - (w_i - r);
-                let dy = row - (h_i - r);
-                dx * dx + dy * dy <= r2
-            } else {
-                true
-            };
-
-            if inside {
-                let pixel = img.get_pixel_mut(px as u32, py as u32);
-                pixel.0 = [
-                    (color[0] as f32 * a + pixel.0[0] as f32 * inv) as u8,
-                    (color[1] as f32 * a + pixel.0[1] as f32 * inv) as u8,
-                    (color[2] as f32 * a + pixel.0[2] as f32 * inv) as u8,
-                    pixel.0[3],
-                ];
-            }
         }
     }
 }

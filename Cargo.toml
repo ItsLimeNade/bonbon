@@ -1,6 +1,6 @@
 [package]
 name = "bonbon"
-version = "0.3.1"
+version = "0.4.0"
 edition = "2021"
 repository = "https://github.com/ItsLimeNade/bonbon"
 homepage = "https://github.com/ItsLimeNade/bonbon?tab=readme-ov-file"
@@ -31,7 +31,7 @@ cinnamon = "1.0.1"
 [features]
 default = []
 cinnamon = ["dep:cinnamon"]
-beetroot = [] # reserved for future sticker/widget integrations
+beetroot = [] # contextual stickers on the glucose graph and bg card
 
 [[example]]
 name = "stickers"

@@ -16,14 +16,14 @@ Bonbon is a fast, customizable graph rendering library designed for diabetes rel
 
 ## Features
 
-- **High Performance**: Optimized rendering with parallel processing via Rayon
 - **Flexible Units**: Support for mg/dL, mmol/L, or dual-unit display
 - **Treatment Visualization**: Insulin boluses, carbohydrate entries, and manual BG readings
-- **Customizable Themes**: Built-in dark & light themes with full customization support
+- **Customizable Themes**: 6 built-in themes. (See `Theme::builtins()`) with full customization support
 - **Dynamic Scaling**: Automatic Y-axis scaling based on glucose values
 - **Timezone Support**: Accurate time axis labels for any timezone
 - **Microbolus Filtering**: Configurable threshold to simplify SMB visualization
-- **BG Card**: Compact status card showing current glucose, trend, delta, IOB/COB, and a 3-hour sparkline
+- **BG Card**: Compact status card showing current glucose, trend, delta, IOB/COB, and a 3 hour sparkline
+- **Time in Range Card**: TIR summary with a stacked band bar, per-band durations and counts, plus average, SD, CV and GMI statistics
 
 ---
 
@@ -48,6 +48,16 @@ The BG Card is a compact 640×320 status card (scalable via `with_scale`) that r
 </p>
 
 
+
+---
+
+## Time in Range Card
+
+The Time in Range Card is a 640×400 summary (scalable via `with_scale`) of how much time was spent in each glycemic band (very low, low, in range, high, very high) rendered as a stacked bar with per-band percentages, durations and reading counts, and a statistics footer (average, SD, CV, GMI, target range). Band thresholds, units, theme and the 3-band/5-band layout are configurable, and the computed numbers are available without rendering through `TirStats::compute`.
+
+<p align="center">
+  <img src="assets/images/example_time_in_range.png" alt="Time in Range Card" width="640">
+</p>
 
 ---
 
