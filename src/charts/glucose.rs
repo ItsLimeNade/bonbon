@@ -41,8 +41,8 @@ pub struct LayoutConfig {
 impl Default for LayoutConfig {
     fn default() -> Self {
         Self {
-            width: 1200,
-            height: 800,
+            width: 1920,
+            height: 1080,
             margin_top: None,
             margin_bottom: None,
             margin_left: None,
@@ -343,10 +343,8 @@ impl<'a> GlucoseGraphBuilder<'a> {
             font: &font,
         };
 
-        // Lay down the same visual base as the bg/TIR cards: a faint grid
-        // texture and a framed plot panel. This is what makes the graph read as
-        // part of the family instead of a bare plotting-library canvas.
-        self.draw_background(&mut img, &ctx);
+        // Frame the plot with the same soft panel the bg/TIR cards use, over a
+        // clean flat background.
         self.draw_plot_panel(&mut img, &ctx);
 
         // Faint gridlines, soft target dashes, then the axis annotations.
@@ -536,37 +534,6 @@ impl<'a> GlucoseGraphBuilder<'a> {
                     (view_min.max(clamp_min), view_max.min(clamp_max))
                 }
             }
-        }
-    }
-
-    /// Paints the shared chart base: a faint grid texture across the whole
-    /// canvas. Mirrors the bg/TIR cards so the charts feel like one family.
-    fn draw_background(&self, img: &mut RgbaImage, ctx: &RenderContext) {
-        let s = ctx.viewport.s;
-        let (w, h) = (self.layout.width, self.layout.height);
-
-        // Subtle grid texture: lines a touch darker than the background.
-        let spacing = (64.0 * s).max(1.0) as u32;
-        let [br, bg, bb, ba] = self.theme.background.0;
-        let line = Rgba([
-            br.saturating_sub(7),
-            bg.saturating_sub(7),
-            bb.saturating_sub(7),
-            ba,
-        ]);
-        let mut x = spacing;
-        while x < w {
-            for y in 0..h {
-                img.put_pixel(x, y, line);
-            }
-            x += spacing;
-        }
-        let mut y = spacing;
-        while y < h {
-            for x in 0..w {
-                img.put_pixel(x, y, line);
-            }
-            y += spacing;
         }
     }
 
