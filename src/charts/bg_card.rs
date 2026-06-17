@@ -7,6 +7,7 @@ use imageproc::drawing::{draw_antialiased_line_segment_mut, draw_text_mut};
 
 use crate::theme::Theme;
 use crate::utils::drawing::draw_filled_rounded_rect;
+use crate::utils::text::text_w;
 
 /// Glucose status used for gradient color, main value color, and sparkline segment colors.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -213,11 +214,6 @@ fn status_color(theme: &Theme, status: GlucoseStatus) -> Rgba<u8> {
     }
 }
 
-/// Approximate text width in pixels for a given font size.
-fn approx_text_w(text: &str, size: f32) -> f32 {
-    text.chars().count() as f32 * size * 0.6
-}
-
 /// Subtle grid pattern drawn over the background before any content.
 fn draw_bg_pattern(img: &mut RgbaImage, theme: &Theme, w: u32, h: u32, s: f32) {
     let spacing = (64.0 * s) as u32;
@@ -289,7 +285,7 @@ fn draw_header(
         &data.watermark_str,
     );
 
-    let tw = approx_text_w(&data.time_str, font_h);
+    let tw = text_w(font, &data.time_str, font_h);
     let tx = (w as f32 - pad - tw) as i32;
     let ty = (cy - font_h / 2.0) as i32;
     draw_text_mut(
@@ -368,7 +364,7 @@ fn draw_content(
     );
 
     let x_right = w as f32 - pad;
-    let gap = approx_text_w(" ", font_iob_cob);
+    let gap = text_w(font, " ", font_iob_cob);
 
     let iob_parts = data.iob_str.as_deref().and_then(|s| s.split_once(' '));
     let cob_parts = data.cob_str.as_deref().and_then(|s| s.split_once(' '));
@@ -376,11 +372,11 @@ fn draw_content(
     let max_val_w = [iob_parts, cob_parts]
         .iter()
         .flatten()
-        .map(|(_, v)| approx_text_w(v, font_iob_cob))
+        .map(|(_, v)| text_w(font, v, font_iob_cob))
         .fold(0.0_f32, f32::max);
 
     let val_x = (x_right - max_val_w) as i32;
-    let label_x = (x_right - max_val_w - gap - approx_text_w("IOB", font_iob_cob)) as i32;
+    let label_x = (x_right - max_val_w - gap - text_w(font, "IOB", font_iob_cob)) as i32;
 
     if let Some((label, value)) = iob_parts {
         draw_text_mut(
@@ -590,8 +586,8 @@ fn draw_info_pill(
         PillIcon::Bytes(b) => image::load_from_memory(b)?,
     };
 
-    let text_w = approx_text_w(&pill.text, font_h);
-    let pill_w = pill_pad + icon_size + icon_gap + text_w + pill_pad;
+    let pill_text_w = text_w(font, &pill.text, font_h);
+    let pill_w = pill_pad + icon_size + icon_gap + pill_text_w + pill_pad;
     let pill_x = (w as f32 - pill_w) / 2.0;
     let pill_y = header_cy - pill_h / 2.0;
 

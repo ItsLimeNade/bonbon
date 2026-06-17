@@ -25,6 +25,7 @@ pub mod theme;
 mod utils {
     pub mod color;
     pub mod drawing;
+    pub mod text;
 }
 pub mod charts {
     pub mod bg_card;

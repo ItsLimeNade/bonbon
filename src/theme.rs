@@ -59,25 +59,13 @@ impl Theme {
         serde_json::from_str(json).expect("Built-in light theme is invalid JSON")
     }
 
-    builtin_theme!(
-        licorice_dark,
-        "licorice_dark"
-    );
-    builtin_theme!(
-        watermelon_dark,
-        "watermelon_dark"
-    );
+    builtin_theme!(licorice_dark, "licorice_dark");
+    builtin_theme!(watermelon_dark, "watermelon_dark");
 
     // --- Light themes -------------------------------------------------------
 
-    builtin_theme!(
-        paper_light,
-        "paper_light"
-    );
-    builtin_theme!(
-        ube_light,
-        "ube_light"
-    );
+    builtin_theme!(paper_light, "paper_light");
+    builtin_theme!(ube_light, "ube_light");
 
     pub fn builtins() -> Vec<(&'static str, Theme)> {
         vec![

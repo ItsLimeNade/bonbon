@@ -79,14 +79,16 @@ pub enum TreatmentDisplayMode {
 }
 
 /// Configuration for the X-Axis time labels.
+///
+/// Both modes render local time (HH:MM) with the relative offset (-Xh)
+/// underneath and a tick mark on the axis; they differ only in how the tick
+/// count is chosen.
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub enum TimeAxisMode {
-    /// Standard hourly ticks.
+    /// Picks a sensible number of evenly spaced labels from the graph width.
     #[default]
     Simple,
-    /// Distributes labels equally (e.g., every N hours) and shows both:
-    /// 1. Local Time (HH:MM)
-    /// 2. Relative Time (-2h)
+    /// Uses exactly `count` evenly spaced labels.
     EquallyDistributed { count: u32 },
     // I'll add more in the future... Probably?
 }

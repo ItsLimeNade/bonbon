@@ -6,10 +6,10 @@ use crate::models::{
     UnitPreference,
 };
 use crate::theme::Theme;
-use crate::utils::color::{darken_color, lighten_color};
+use crate::utils::color::darken_color;
 use crate::utils::drawing::{
-    create_circle_sprite, draw_dashed_horizontal_line, draw_fast_rect, draw_smart_circle,
-    draw_smart_triangle, draw_text_with_outline,
+    blend_fast_rect, blend_sprite, create_aa_circle_sprite, draw_dashed_horizontal_line,
+    draw_filled_rounded_rect, draw_smart_circle, draw_smart_triangle, draw_text_with_outline,
 };
 
 use ab_glyph::{FontRef, PxScale};
@@ -19,18 +19,22 @@ use image::{Rgba, RgbaImage};
 use imageproc::drawing::{draw_filled_circle_mut, draw_line_segment_mut, draw_text_mut};
 use rayon::prelude::*;
 
+/// Gap (before scaling) between the plot area and the rounded panel that frames
+/// it. Shared by the panel and the axis labels so the exterior lines up.
+const PANEL_PAD: f32 = 16.0;
+
 /// Configuration for the visual layout of the graph.
 #[derive(Clone, Debug)]
 pub struct LayoutConfig {
     pub width: u32,
     pub height: u32,
-    /// If None, defaults to 80.0 * scale
+    /// If None, auto-sized for the unit caption (~56 * scale, ~78 for dual units).
     pub margin_top: Option<f32>,
-    /// If None, defaults to 100.0 * scale
+    /// If None, defaults to 84.0 * scale
     pub margin_bottom: Option<f32>,
-    /// If None, defaults to 120.0 * scale
+    /// If None, auto-sized for the Y-axis labels (~110 * scale, ~120 for mmol/L).
     pub margin_left: Option<f32>,
-    /// If None, defaults to 60.0 * scale
+    /// If None, defaults to 32.0 * scale
     pub margin_right: Option<f32>,
 }
 
@@ -100,6 +104,7 @@ pub struct GlucoseGraphBuilder<'a> {
     theme: Theme,
     font: &'a [u8],
     microbolus_threshold: f32,
+    show_trace: bool,
     #[cfg(feature = "beetroot")]
     sticker_set: Option<crate::charts::stickers::StickerSet>,
 }
@@ -130,6 +135,7 @@ impl<'a> GlucoseGraphBuilder<'a> {
             theme: Theme::dark(),
             font: DEFAULT_FONT,
             microbolus_threshold: 0.0,
+            show_trace: true,
             #[cfg(feature = "beetroot")]
             sticker_set: None,
         }
@@ -290,6 +296,16 @@ impl<'a> GlucoseGraphBuilder<'a> {
         self
     }
 
+    /// Toggles the connecting line drawn through the readings.
+    ///
+    /// When `true` (the default) consecutive readings are joined by a smooth,
+    /// status-colored trace beneath the circles. Set to `false` for a plain
+    /// scatter of points.
+    pub fn with_trace(mut self, show: bool) -> Self {
+        self.show_trace = show;
+        self
+    }
+
     /// Builds the final image, returning an ImageBuffer.
     pub fn build(mut self) -> Result<RgbaImage, Box<dyn std::error::Error>> {
         let font = FontRef::try_from_slice(self.font)?;
@@ -327,13 +343,17 @@ impl<'a> GlucoseGraphBuilder<'a> {
             font: &font,
         };
 
-        // Pretty self-explanatory, helper functions to render the graphics.
-        // Gridlines first, target lines on top, keeps target colors vivid.
+        // Lay down the same visual base as the bg/TIR cards: a faint grid
+        // texture and a framed plot panel. This is what makes the graph read as
+        // part of the family instead of a bare plotting-library canvas.
+        self.draw_background(&mut img, &ctx);
+        self.draw_plot_panel(&mut img, &ctx);
+
+        // Faint gridlines, soft target dashes, then the axis annotations.
         self.draw_value_gridlines(&mut img, &ctx);
         self.draw_target_lines(&mut img, &ctx);
         self.draw_date_separators(&mut img, &ctx);
         self.draw_time_axis(&mut img, &ctx);
-        self.draw_axis_border(&mut img, &ctx);
         self.draw_labels_and_units(&mut img, &ctx);
 
         // Same optimization than for entries.
@@ -344,7 +364,11 @@ impl<'a> GlucoseGraphBuilder<'a> {
         #[cfg(feature = "beetroot")]
         self.draw_stickers(&mut img, &ctx, visible_entries_slice);
 
-        // Draw entries last so they appear on top, making for a clear view of the graph.
+        // An optional smooth trace connects the readings into one clean line,
+        // then the (anti-aliased) circles sit on top of it.
+        if self.show_trace {
+            self.draw_entry_trace(&mut img, &ctx, visible_entries_slice);
+        }
         self.draw_entries(&mut img, &ctx, visible_entries_slice);
 
         Ok(img)
@@ -386,11 +410,22 @@ impl<'a> GlucoseGraphBuilder<'a> {
         // I actually completely forgot I what made here TwT"
         let s = scale_x.min(scale_y).max(0.5);
 
-        // `.unwrap_or` used to set the default values
-        let m_top = self.layout.margin_top.unwrap_or(80.0 * s);
-        let m_bottom = self.layout.margin_bottom.unwrap_or(100.0 * s);
-        let m_left = self.layout.margin_left.unwrap_or(120.0 * s);
-        let m_right = self.layout.margin_right.unwrap_or(60.0 * s);
+        // Default margins are kept as tight as the labels allow so little of
+        // the canvas is wasted (it scales down on Discord etc.). Top and left
+        // adapt to the unit: the dual caption needs two lines, and mmol/L
+        // labels are wider than mg/dL.
+        let is_dual = matches!(self.unit_display, UnitDisplay::Dual { .. });
+        let wide_y = matches!(
+            self.unit_display,
+            UnitDisplay::MmolL | UnitDisplay::Dual { .. }
+        );
+        let top_default = if is_dual { 78.0 } else { 56.0 };
+        let left_default = if wide_y { 120.0 } else { 110.0 };
+
+        let m_top = self.layout.margin_top.unwrap_or(top_default * s);
+        let m_bottom = self.layout.margin_bottom.unwrap_or(84.0 * s);
+        let m_left = self.layout.margin_left.unwrap_or(left_default * s);
+        let m_right = self.layout.margin_right.unwrap_or(32.0 * s);
 
         let plot_w = self.layout.width as f32 - m_left - m_right;
         let plot_h = self.layout.height as f32 - m_top - m_bottom;
@@ -504,22 +539,71 @@ impl<'a> GlucoseGraphBuilder<'a> {
         }
     }
 
-    /// Draws solid horizontal gridlines at each Y-axis value tick so readings
-    /// can be eyeballed against a clear reference grid. Step count mirrors
-    /// [`draw_labels_and_units`] so lines and labels stay in lockstep.
+    /// Paints the shared chart base: a faint grid texture across the whole
+    /// canvas. Mirrors the bg/TIR cards so the charts feel like one family.
+    fn draw_background(&self, img: &mut RgbaImage, ctx: &RenderContext) {
+        let s = ctx.viewport.s;
+        let (w, h) = (self.layout.width, self.layout.height);
+
+        // Subtle grid texture: lines a touch darker than the background.
+        let spacing = (64.0 * s).max(1.0) as u32;
+        let [br, bg, bb, ba] = self.theme.background.0;
+        let line = Rgba([
+            br.saturating_sub(7),
+            bg.saturating_sub(7),
+            bb.saturating_sub(7),
+            ba,
+        ]);
+        let mut x = spacing;
+        while x < w {
+            for y in 0..h {
+                img.put_pixel(x, y, line);
+            }
+            x += spacing;
+        }
+        let mut y = spacing;
+        while y < h {
+            for x in 0..w {
+                img.put_pixel(x, y, line);
+            }
+            y += spacing;
+        }
+    }
+
+    /// Draws the rounded panel that frames the plot area. This replaces the old
+    /// protruding L-shaped axis spines (the main "unstyled plot" tell) with the
+    /// same soft raised-card surface the other charts use.
+    fn draw_plot_panel(&self, img: &mut RgbaImage, ctx: &RenderContext) {
+        let s = ctx.viewport.s;
+        let pad = PANEL_PAD * s;
+        let [gr, gg, gb, _] = self.theme.grid_major.0;
+        draw_filled_rounded_rect(
+            img,
+            (ctx.viewport.plot_left - pad) as i32,
+            (ctx.viewport.plot_top - pad) as i32,
+            (ctx.viewport.plot_w + 2.0 * pad) as u32,
+            (ctx.viewport.plot_h + 2.0 * pad) as u32,
+            (18.0 * s) as i32,
+            Rgba([gr, gg, gb, 110]),
+        );
+    }
+
+    /// Draws faint horizontal gridlines at each Y-axis value tick. Step count
+    /// mirrors [`draw_labels_and_units`] so lines and labels stay in lockstep.
     ///
-    /// Stripe color is a darkened background and subtle "shadow" rather than
-    /// a bright overlay, so it never competes with the data points.
+    /// Lines are a low-alpha blend of `axis_lines` over the panel, so they give
+    /// the eye a reference without ever competing with the data points.
     fn draw_value_gridlines(&self, img: &mut RgbaImage, ctx: &RenderContext) {
         let steps = 6;
         let step_size = (ctx.y_max - ctx.y_min) / (steps as f32);
         let grid_thickness = (1.0 * ctx.viewport.s).ceil() as u32;
-        let stripe_color = lighten_color(self.theme.background, 0.08);
+        let [lr, lg, lb, _] = self.theme.axis_lines.0;
+        let stripe_color = Rgba([lr, lg, lb, 30]);
 
         for i in 0..=steps {
             let val = ctx.y_min + (i as f32 * step_size);
             let y = ctx.project_y(val);
-            draw_fast_rect(
+            blend_fast_rect(
                 img,
                 ctx.viewport.plot_left as i32,
                 (y - grid_thickness as f32 / 2.0).round() as i32,
@@ -573,12 +657,21 @@ impl<'a> GlucoseGraphBuilder<'a> {
         );
     }
 
-    /// Draws the inline "DD/MM" label whenever the date rolls over inside the window.
-    /// No vertical separator line, the date is just a small inline annotation.
+    /// Marks each midnight roll-over inside the window with a faint vertical
+    /// dashed separator spanning the plot, labelled "DD/MM" at the top. The line
+    /// makes the day boundary unmistakable; the dashes and low alpha keep it
+    /// behind the data.
     fn draw_date_separators(&self, img: &mut RgbaImage, ctx: &RenderContext) {
         let local_start = ctx.start_time.with_timezone(&self.timezone);
         let local_end = ctx.end_time.with_timezone(&self.timezone);
-        let font_size_sm = (24.0 + 1.0) * ctx.viewport.s;
+        let s = ctx.viewport.s;
+        let font_size_sm = (24.0 + 1.0) * s;
+
+        let [ar, ag, ab, _] = self.theme.axis_lines.0;
+        let line_color = Rgba([ar, ag, ab, 55]);
+        let dash = (9.0 * s).max(2.0) as i32;
+        let gap = (7.0 * s).max(2.0) as i32;
+        let thickness = (1.0 * s).ceil() as u32;
 
         let mut pointer = local_start
             .date_naive()
@@ -593,15 +686,29 @@ impl<'a> GlucoseGraphBuilder<'a> {
         while pointer <= local_end {
             let x = ctx.project_x(pointer.with_timezone(&Utc));
             if x >= ctx.viewport.plot_left && x <= ctx.viewport.plot_right {
-                let date_str = pointer.format("%d/%m").to_string();
-                let tx = (x + 5.0 * ctx.viewport.s) as i32;
-                let ty = (ctx.viewport.plot_top + 5.0 * ctx.viewport.s) as i32;
+                // Vertical dashed separator across the plot height.
+                let mut y = ctx.viewport.plot_top as i32;
+                let bottom = ctx.viewport.plot_bottom as i32;
+                while y < bottom {
+                    let seg = dash.min(bottom - y);
+                    blend_fast_rect(
+                        img,
+                        (x - thickness as f32 / 2.0) as i32,
+                        y,
+                        thickness,
+                        seg as u32,
+                        line_color,
+                    );
+                    y += dash + gap;
+                }
 
-                draw_text_mut(
+                let date_str = pointer.format("%d/%m").to_string();
+                draw_text_with_outline(
                     img,
                     self.theme.text_secondary,
-                    tx,
-                    ty,
+                    self.theme.background,
+                    (x + 6.0 * s) as i32,
+                    (ctx.viewport.plot_top + 5.0 * s) as i32,
                     PxScale::from(font_size_sm),
                     ctx.font,
                     &date_str,
@@ -611,131 +718,130 @@ impl<'a> GlucoseGraphBuilder<'a> {
         }
     }
 
-    /// Draws the time tick labels along the X axis. No vertical gridlines,
-    /// horizontal value gridlines (see [`draw_value_gridlines`]) carry the eye instead.
+    /// Draws the X-axis time ticks: local `HH:MM` plus the relative `-Xh` offset
+    /// underneath. A short tick mark drops from the axis at each label so the
+    /// time scale is unmistakable.
+    ///
+    /// Both axis modes render here. [`TimeAxisMode::Simple`] auto-picks a tick
+    /// count from the plot width; [`TimeAxisMode::EquallyDistributed`] honors the
+    /// caller's `count`.
     fn draw_time_axis(&self, img: &mut RgbaImage, ctx: &RenderContext) {
-        if let TimeAxisMode::EquallyDistributed { count } = self.time_axis_mode {
-            let step_secs = ctx.time_span_secs / (count as f32);
-            let font_size_sm = (24.0 + 1.0) * ctx.viewport.s;
-            let font_size_xs = (20.0 + 1.0) * ctx.viewport.s;
+        let count = match self.time_axis_mode {
+            TimeAxisMode::EquallyDistributed { count } => count.max(1),
+            // Aim for roughly one label per ~180px so labels never crowd.
+            TimeAxisMode::Simple => (ctx.viewport.plot_w / (180.0 * ctx.viewport.s))
+                .round()
+                .clamp(2.0, 10.0) as u32,
+        };
 
-            for i in 0..=count {
-                let offset = i as f32 * step_secs;
-                let tick_time = ctx.start_time + Duration::seconds(offset as i64);
-                let x =
-                    ctx.viewport.plot_left + (offset / ctx.time_span_secs) * ctx.viewport.plot_w;
-
-                if x > ctx.viewport.plot_right + 1.0 {
-                    continue;
-                }
-
-                let local_time = tick_time.with_timezone(&self.timezone);
-                let time_str = local_time.format("%H:%M").to_string();
-                let dim_time = text_dimensions(&time_str, font_size_sm, ctx.font);
-
-                let mut tx = (x - dim_time.0 / 2.0) as i32;
-                let min_tx = ctx.viewport.plot_left as i32;
-                let max_tx = (ctx.viewport.plot_right - dim_time.0) as i32;
-                tx = tx.clamp(min_tx, max_tx);
-
-                let ty = (ctx.viewport.plot_bottom + 25.0 * ctx.viewport.s) as i32;
-
-                draw_text_mut(
-                    img,
-                    self.theme.text_primary,
-                    tx,
-                    ty,
-                    PxScale::from(font_size_sm),
-                    ctx.font,
-                    &time_str,
-                );
-
-                let diff_secs = (ctx.end_time - tick_time).num_seconds();
-                let hours = diff_secs as f32 / 3600.0;
-                let rel_str = if hours.abs() < 0.1 {
-                    "-0h".to_string()
-                } else {
-                    format!("-{:.1}h", hours)
-                };
-                let dim_rel = text_dimensions(&rel_str, font_size_xs, ctx.font);
-                let mut rx = (x - dim_rel.0 / 2.0) as i32;
-                let max_rx = (ctx.viewport.plot_right - dim_rel.0) as i32;
-                rx = rx.clamp(min_tx, max_rx);
-                let ry = (ctx.viewport.plot_bottom
-                    + 25.0 * ctx.viewport.s
-                    + dim_time.1
-                    + 4.0 * ctx.viewport.s) as i32;
-
-                draw_text_mut(
-                    img,
-                    self.theme.text_dim,
-                    rx,
-                    ry,
-                    PxScale::from(font_size_xs),
-                    ctx.font,
-                    &rel_str,
-                );
-            }
-        }
-    }
-
-    /// Private helper function that draws the... you guessed it! Borders of the axis lines!
-    fn draw_axis_border(&self, img: &mut RgbaImage, ctx: &RenderContext) {
-        let axis_thickness = (2.0 * ctx.viewport.s).ceil() as u32;
-        let overlap_offset = 3.0 * axis_thickness as f32;
-
-        //  Y Axis
-        draw_fast_rect(
-            img,
-            (ctx.viewport.plot_left - overlap_offset - axis_thickness as f32) as i32,
-            (ctx.viewport.plot_top - overlap_offset) as i32,
-            axis_thickness,
-            (ctx.viewport.plot_h + (2.0 * overlap_offset)) as u32,
-            self.theme.axis_lines,
-        );
-
-        // X Axis
-        draw_fast_rect(
-            img,
-            (ctx.viewport.plot_left - overlap_offset) as i32,
-            (ctx.viewport.plot_bottom + overlap_offset) as i32,
-            (ctx.viewport.plot_w + (2.0 * overlap_offset)) as u32,
-            axis_thickness,
-            self.theme.axis_lines,
-        );
-    }
-
-    fn draw_labels_and_units(&self, img: &mut RgbaImage, ctx: &RenderContext) {
-        let font_size_md = (30.0 + 1.0) * ctx.viewport.s;
+        let step_secs = ctx.time_span_secs / (count as f32);
         let font_size_sm = (24.0 + 1.0) * ctx.viewport.s;
         let font_size_xs = (20.0 + 1.0) * ctx.viewport.s;
 
-        let unit_anchor_x = ctx.viewport.plot_left - (10.0 * ctx.viewport.s);
-        let unit_start_y =
-            ctx.viewport.plot_bottom + (font_size_md / 2.0) + (15.0 * ctx.viewport.s);
+        let tick_color = {
+            let [r, g, b, _] = self.theme.axis_lines.0;
+            Rgba([r, g, b, 70])
+        };
+        let tick_h = 7.0 * ctx.viewport.s;
 
-        match self.unit_display {
-            UnitDisplay::MgDl => {
-                let text = "mg/dL";
-                let dim = text_dimensions(text, font_size_sm, ctx.font);
-                draw_text_mut(
-                    img,
-                    self.theme.text_primary,
-                    (unit_anchor_x - dim.0) as i32,
-                    unit_start_y as i32,
-                    PxScale::from(font_size_sm),
-                    ctx.font,
-                    text,
-                );
+        for i in 0..=count {
+            let offset = i as f32 * step_secs;
+            let tick_time = ctx.start_time + Duration::seconds(offset as i64);
+            let x = ctx.viewport.plot_left + (offset / ctx.time_span_secs) * ctx.viewport.plot_w;
+
+            if x > ctx.viewport.plot_right + 1.0 {
+                continue;
             }
-            UnitDisplay::MmolL => {
-                let text = "mmol/L";
+
+            // Small tick mark just below the plot to anchor the label.
+            blend_fast_rect(
+                img,
+                x.round() as i32,
+                ctx.viewport.plot_bottom as i32,
+                (1.0 * ctx.viewport.s).ceil() as u32,
+                tick_h as u32,
+                tick_color,
+            );
+
+            let local_time = tick_time.with_timezone(&self.timezone);
+            let time_str = local_time.format("%H:%M").to_string();
+            let dim_time = text_dimensions(&time_str, font_size_sm, ctx.font);
+
+            let mut tx = (x - dim_time.0 / 2.0) as i32;
+            let min_tx = ctx.viewport.plot_left as i32;
+            let max_tx = (ctx.viewport.plot_right - dim_time.0) as i32;
+            tx = tx.clamp(min_tx, max_tx);
+
+            let ty = (ctx.viewport.plot_bottom + 28.0 * ctx.viewport.s) as i32;
+
+            draw_text_mut(
+                img,
+                self.theme.text_primary,
+                tx,
+                ty,
+                PxScale::from(font_size_sm),
+                ctx.font,
+                &time_str,
+            );
+
+            let diff_secs = (ctx.end_time - tick_time).num_seconds();
+            let hours = diff_secs as f32 / 3600.0;
+            let rel_str = if hours.abs() < 0.1 {
+                "-0h".to_string()
+            } else {
+                format!("-{:.1}h", hours)
+            };
+            let dim_rel = text_dimensions(&rel_str, font_size_xs, ctx.font);
+            let mut rx = (x - dim_rel.0 / 2.0) as i32;
+            let max_rx = (ctx.viewport.plot_right - dim_rel.0) as i32;
+            rx = rx.clamp(min_tx, max_rx);
+            let ry = (ctx.viewport.plot_bottom
+                + 28.0 * ctx.viewport.s
+                + dim_time.1
+                + 4.0 * ctx.viewport.s) as i32;
+
+            draw_text_mut(
+                img,
+                self.theme.text_secondary,
+                rx,
+                ry,
+                PxScale::from(font_size_xs),
+                ctx.font,
+                &rel_str,
+            );
+        }
+    }
+
+    /// Draws the left-margin Y-axis value numbers and the unit caption.
+    ///
+    /// Everything shares a single right edge that sits clear of the framed
+    /// panel, and the unit caption is a small header above the axis rather than
+    /// crammed into the busy bottom-left corner, so the exterior reads as a tidy
+    /// margin around the plot.
+    fn draw_labels_and_units(&self, img: &mut RgbaImage, ctx: &RenderContext) {
+        let s = ctx.viewport.s;
+        let font_size_md = (30.0 + 1.0) * s;
+        let font_size_sm = (24.0 + 1.0) * s;
+        let font_size_xs = (20.0 + 1.0) * s;
+
+        // Common right edge for the whole left margin, kept clear of the panel.
+        let label_right = ctx.viewport.plot_left - PANEL_PAD * s - 12.0 * s;
+
+        // Unit caption: a small header sitting just above the top of the axis.
+        let unit_bottom = ctx.viewport.plot_top - PANEL_PAD * s - 6.0 * s;
+        match self.unit_display {
+            UnitDisplay::MgDl | UnitDisplay::MmolL => {
+                let text = if let UnitDisplay::MmolL = self.unit_display {
+                    "mmol/L"
+                } else {
+                    "mg/dL"
+                };
                 let dim = text_dimensions(text, font_size_sm, ctx.font);
                 draw_text_mut(
                     img,
-                    self.theme.text_primary,
-                    (unit_anchor_x - dim.0) as i32,
-                    unit_start_y as i32,
+                    self.theme.text_secondary,
+                    (label_right - dim.0) as i32,
+                    (unit_bottom - dim.1) as i32,
                     PxScale::from(font_size_sm),
                     ctx.font,
                     text,
@@ -749,25 +855,22 @@ impl<'a> GlucoseGraphBuilder<'a> {
                 let dim1 = text_dimensions(u1, font_size_sm, ctx.font);
                 let dim2 = text_dimensions(u2, font_size_xs, ctx.font);
 
-                let tx1 = (unit_anchor_x - dim1.0) as i32;
-                let ty1 = unit_start_y as i32;
+                let ty2 = unit_bottom - dim2.1;
+                let ty1 = ty2 - 2.0 * s - dim1.1;
                 draw_text_mut(
                     img,
-                    self.theme.text_primary,
-                    tx1,
-                    ty1,
+                    self.theme.text_secondary,
+                    (label_right - dim1.0) as i32,
+                    ty1 as i32,
                     PxScale::from(font_size_sm),
                     ctx.font,
                     u1,
                 );
-
-                let tx2 = (unit_anchor_x - dim2.0) as i32;
-                let ty2 = (unit_start_y + dim1.1 + 2.0 * ctx.viewport.s) as i32;
                 draw_text_mut(
                     img,
                     self.theme.text_dim,
-                    tx2,
-                    ty2,
+                    (label_right - dim2.0) as i32,
+                    ty2 as i32,
                     PxScale::from(font_size_xs),
                     ctx.font,
                     u2,
@@ -806,7 +909,7 @@ impl<'a> GlucoseGraphBuilder<'a> {
             };
 
             let main_dim = text_dimensions(&main_text, font_size_md, ctx.font);
-            let main_tx = (ctx.viewport.plot_left - main_dim.0 - 10.0 * ctx.viewport.s) as i32;
+            let main_tx = (label_right - main_dim.0) as i32;
             let main_ty = (y_pos - main_dim.1 / 2.0) as i32;
 
             draw_text_mut(
@@ -821,7 +924,7 @@ impl<'a> GlucoseGraphBuilder<'a> {
 
             if let Some(sub) = sub_text {
                 let sub_dim = text_dimensions(&sub, font_size_xs, ctx.font);
-                let sub_tx = (ctx.viewport.plot_left - sub_dim.0 - 10.0 * ctx.viewport.s) as i32;
+                let sub_tx = (label_right - sub_dim.0) as i32;
                 let sub_ty = (y_pos + main_dim.1 / 2.0) as i32;
 
                 draw_text_mut(
@@ -1179,7 +1282,83 @@ impl<'a> GlucoseGraphBuilder<'a> {
         }
     }
 
-    /// Private helper function to draw entries on the graph.
+    /// Draws the status-colored line connecting consecutive readings. Sits
+    /// underneath the circles and turns a loose scatter of dots into one
+    /// continuous, easy-to-follow trace.
+    ///
+    /// The line is built by stamping a small anti-aliased disc along each
+    /// segment, which gives it an even thickness and rounded joins on every
+    /// slope (a plain offset line goes thin and ragged on steep climbs — the
+    /// "horrible" look). Segments are only drawn between readings that are
+    /// genuinely contiguous: a gap well beyond the data's own typical cadence
+    /// (e.g. a sensor dropout) is left open instead of being bridged by a long
+    /// misleading line, so the trace stays clean for any data thrown at it.
+    fn draw_entry_trace(&self, img: &mut RgbaImage, ctx: &RenderContext, entries: &[GraphEntry]) {
+        if entries.len() < 2 {
+            return;
+        }
+
+        // Robust "expected" spacing (median gap) so the bridge threshold adapts
+        // to 1-, 5- or 15-minute data alike.
+        let mut gaps: Vec<i64> = entries
+            .windows(2)
+            .map(|w| (w[1].date - w[0].date).num_seconds())
+            .collect();
+        gaps.sort_unstable();
+        let median_gap = gaps[gaps.len() / 2].max(1);
+        let max_gap = (median_gap as f32 * 2.5) as i64;
+
+        // Line a little thinner than the markers so the dots still lead.
+        let base_point_radius = if self.entries.len() > 100 { 4.0 } else { 6.0 };
+        let point_radius = (base_point_radius + 1.0) * ctx.viewport.s;
+        let trace_half = (point_radius * 0.45).round().max(1.0) as i32;
+
+        let (size, sp_high) = create_aa_circle_sprite(trace_half, self.theme.glucose_high);
+        let (_, sp_low) = create_aa_circle_sprite(trace_half, self.theme.glucose_low);
+        let (_, sp_range) = create_aa_circle_sprite(trace_half, self.theme.glucose_in_range);
+        let pick = |sgv: f32| -> &[u8] {
+            if sgv > self.target_high {
+                &sp_high
+            } else if sgv < self.target_low {
+                &sp_low
+            } else {
+                &sp_range
+            }
+        };
+
+        let mut last_stamp: Option<(i32, i32)> = None;
+        for w in entries.windows(2) {
+            let (a, b) = (&w[0], &w[1]);
+            if (b.date - a.date).num_seconds() > max_gap {
+                last_stamp = None;
+                continue;
+            }
+
+            let x0 = ctx.project_x(a.date);
+            let y0 = ctx.project_y(a.sgv);
+            let x1 = ctx.project_x(b.date);
+            let y1 = ctx.project_y(b.sgv);
+
+            let dx = x1 - x0;
+            let dy = y1 - y0;
+            let steps = (dx * dx + dy * dy).sqrt().ceil().max(1.0) as i32;
+
+            for k in 0..=steps {
+                let t = k as f32 / steps as f32;
+                let px = (x0 + dx * t).round() as i32;
+                let py = (y0 + dy * t).round() as i32;
+                if last_stamp == Some((px, py)) {
+                    continue;
+                }
+                let sgv = a.sgv + (b.sgv - a.sgv) * t;
+                blend_sprite(img, pick(sgv), size, px, py);
+                last_stamp = Some((px, py));
+            }
+        }
+    }
+
+    /// Draws the reading markers: soft, anti-aliased circles colored by status.
+    /// Kept on top of the trace so each reading is still a distinct point.
     fn draw_entries(&self, img: &mut RgbaImage, ctx: &RenderContext, entries: &[GraphEntry]) {
         if entries.is_empty() {
             return;
@@ -1187,25 +1366,19 @@ impl<'a> GlucoseGraphBuilder<'a> {
 
         let base_point_radius = if self.entries.len() > 100 { 4.0 } else { 6.0 };
         let point_radius = (base_point_radius + 1.0) * ctx.viewport.s;
-        let radius_i32 = point_radius as i32;
+        let radius_i32 = point_radius.max(1.0) as i32;
 
-        let (sprite_size, sprite_high) = create_circle_sprite(radius_i32, self.theme.glucose_high);
-        let (_, sprite_low) = create_circle_sprite(radius_i32, self.theme.glucose_low);
-        let (_, sprite_range) = create_circle_sprite(radius_i32, self.theme.glucose_in_range);
+        let (sprite_size, sprite_high) =
+            create_aa_circle_sprite(radius_i32, self.theme.glucose_high);
+        let (_, sprite_low) = create_aa_circle_sprite(radius_i32, self.theme.glucose_low);
+        let (_, sprite_range) = create_aa_circle_sprite(radius_i32, self.theme.glucose_in_range);
 
         let mut last_draw_pos: Option<(i32, i32)> = None;
         let min_dist_sq = (point_radius * 0.5).powf(2.0);
 
-        let (img_w, img_h) = img.dimensions();
-        let img_w_i32 = img_w as i32;
-        let img_h_i32 = img_h as i32;
-        let img_raw = img.as_mut();
-
         for e in entries {
-            let x = ctx.project_x(e.date);
-            let y = ctx.project_y(e.sgv);
-            let ix = x as i32;
-            let iy = y as i32;
+            let ix = ctx.project_x(e.date) as i32;
+            let iy = ctx.project_y(e.sgv) as i32;
 
             if let Some((lx, ly)) = last_draw_pos {
                 let dx = (ix - lx) as f32;
@@ -1215,7 +1388,7 @@ impl<'a> GlucoseGraphBuilder<'a> {
                 }
             }
 
-            let sprite_buf = if e.sgv > self.target_high {
+            let sprite = if e.sgv > self.target_high {
                 &sprite_high
             } else if e.sgv < self.target_low {
                 &sprite_low
@@ -1223,38 +1396,7 @@ impl<'a> GlucoseGraphBuilder<'a> {
                 &sprite_range
             };
 
-            let sprite_offset = radius_i32;
-
-            for sy in 0..sprite_size {
-                let dy = iy - sprite_offset + sy as i32;
-
-                if dy < 0 || dy >= img_h_i32 {
-                    continue;
-                }
-
-                let row_idx_img = (dy as usize * img_w as usize) * 4;
-                let row_idx_sprite = (sy * sprite_size) as usize * 4;
-
-                for sx in 0..sprite_size {
-                    let dx = ix - sprite_offset + sx as i32;
-
-                    if dx < 0 || dx >= img_w_i32 {
-                        continue;
-                    }
-
-                    let sprite_px_idx = row_idx_sprite + sx as usize * 4;
-
-                    if sprite_buf[sprite_px_idx + 3] != 0 {
-                        let dst_idx = row_idx_img + dx as usize * 4;
-
-                        img_raw[dst_idx] = sprite_buf[sprite_px_idx];
-                        img_raw[dst_idx + 1] = sprite_buf[sprite_px_idx + 1];
-                        img_raw[dst_idx + 2] = sprite_buf[sprite_px_idx + 2];
-                        img_raw[dst_idx + 3] = sprite_buf[sprite_px_idx + 3];
-                    }
-                }
-            }
-
+            blend_sprite(img, sprite, sprite_size, ix, iy);
             last_draw_pos = Some((ix, iy));
         }
     }

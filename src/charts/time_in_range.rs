@@ -6,6 +6,7 @@ use crate::models::{GraphEntry, UnitDisplay, UnitPreference};
 use crate::theme::Theme;
 use crate::utils::color::darken_color;
 use crate::utils::drawing::{draw_fast_rect, draw_filled_rounded_rect};
+use crate::utils::text::text_w;
 
 const MGDL_PER_MMOL: f32 = 18.0182;
 
@@ -428,11 +429,6 @@ fn dominant_status(stats: &TirStats) -> crate::charts::bg_card::GlucoseStatus {
     }
 }
 
-/// Approximate text width in pixels for the bundled monospace font.
-fn approx_text_w(text: &str, size: f32) -> f32 {
-    text.chars().count() as f32 * size * 0.6
-}
-
 /// Subtle grid pattern drawn over the background before any content.
 /// Mirrors the bg card so the family looks related.
 fn draw_bg_pattern(img: &mut RgbaImage, theme: &Theme, w: u32, h: u32, s: f32) {
@@ -503,7 +499,7 @@ fn draw_header(
         title,
     );
 
-    let tw = approx_text_w(period, font_period);
+    let tw = text_w(font, period, font_period);
     draw_text_mut(
         img,
         theme.text_secondary,
@@ -658,7 +654,7 @@ fn draw_band_rows(
         };
         let pct_str = fmt_pct(b.pct);
         let pct_color = if b.count == 0 { theme.text_dim } else { color };
-        let tw = approx_text_w(&pct_str, font_pct);
+        let tw = text_w(font, &pct_str, font_pct);
         draw_text_mut(
             img,
             pct_color,

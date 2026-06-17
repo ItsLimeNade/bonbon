@@ -23,7 +23,9 @@ pub fn draw_dashed_horizontal_line(
     while current_x < end_x {
         let segment_w = dash_length.min(end_x - current_x);
 
-        draw_fast_rect(
+        // Blend (not overwrite) so translucent target colors sit softly on top
+        // of the panel instead of punching holes in it.
+        blend_fast_rect(
             img,
             current_x,
             y_start,
@@ -270,26 +272,116 @@ pub fn draw_fast_rect(img: &mut RgbaImage, x: i32, y: i32, w: u32, h: u32, color
     }
 }
 
-pub fn create_circle_sprite(radius: i32, color: Rgba<u8>) -> (u32, Vec<u8>) {
-    let side = (radius * 2 + 1) as u32;
-    let mut buffer = vec![0u8; (side * side * 4) as usize];
-    let r2 = radius * radius;
+/// Like [`draw_fast_rect`], but alpha-blends `color` over the existing pixels
+/// instead of overwriting them. Used for the graph's faint gridlines and
+/// translucent target dashes so they layer cleanly over the plot panel.
+pub fn blend_fast_rect(img: &mut RgbaImage, x: i32, y: i32, w: u32, h: u32, color: Rgba<u8>) {
+    let (img_w, img_h) = img.dimensions();
 
-    for y in 0..side as i32 {
-        for x in 0..side as i32 {
-            let dx = x - radius;
-            let dy = y - radius;
-            if dx * dx + dy * dy <= r2 {
-                let idx = ((y as u32 * side + x as u32) * 4) as usize;
+    let x0 = x.max(0);
+    let y0 = y.max(0);
+    let x1 = (x + w as i32).min(img_w as i32);
+    let y1 = (y + h as i32).min(img_h as i32);
+
+    if x0 >= x1 || y0 >= y1 {
+        return;
+    }
+
+    let a = color[3] as f32 / 255.0;
+    if a <= 0.0 {
+        return;
+    }
+    let inv = 1.0 - a;
+    let raw = img.as_mut();
+
+    for py in y0..y1 {
+        let row = (py as u32 * img_w) as usize * 4;
+        for px in x0..x1 {
+            let idx = row + px as usize * 4;
+            raw[idx] = (color[0] as f32 * a + raw[idx] as f32 * inv) as u8;
+            raw[idx + 1] = (color[1] as f32 * a + raw[idx + 1] as f32 * inv) as u8;
+            raw[idx + 2] = (color[2] as f32 * a + raw[idx + 2] as f32 * inv) as u8;
+            // dst alpha untouched
+        }
+    }
+}
+
+/// Builds an **anti-aliased** filled-circle sprite. Rim pixels carry partial
+/// alpha (their coverage of the disc) so the dot blends smoothly onto the
+/// canvas instead of showing the hard, stair-stepped edge of a binary mask.
+///
+/// The returned buffer is RGBA with `color`'s alpha pre-scaled by coverage;
+/// composite it with [`blend_sprite`] rather than copying it raw. A 1px border
+/// of padding is added so the soft edge is never clipped.
+pub fn create_aa_circle_sprite(radius: i32, color: Rgba<u8>) -> (u32, Vec<u8>) {
+    let side = (radius * 2 + 3) as u32;
+    let center = (side as f32 - 1.0) / 2.0;
+    let r = radius as f32;
+    let mut buffer = vec![0u8; (side * side * 4) as usize];
+
+    for y in 0..side {
+        for x in 0..side {
+            let dx = x as f32 - center;
+            let dy = y as f32 - center;
+            let dist = (dx * dx + dy * dy).sqrt();
+            // Linear 1px falloff across the rim gives a clean soft edge.
+            let coverage = (r + 0.5 - dist).clamp(0.0, 1.0);
+            if coverage > 0.0 {
+                let idx = ((y * side + x) * 4) as usize;
                 buffer[idx] = color[0];
                 buffer[idx + 1] = color[1];
                 buffer[idx + 2] = color[2];
-                buffer[idx + 3] = color[3];
+                buffer[idx + 3] = (color[3] as f32 * coverage).round() as u8;
             }
-            // else leave as 0 (transparent)
         }
     }
     (side, buffer)
+}
+
+/// Alpha-blends a square RGBA `sprite` of side `size` centered at (`cx`, `cy`)
+/// onto `img`, honoring each source pixel's alpha. Pairs with
+/// [`create_aa_circle_sprite`] for smooth, soft-edged markers.
+pub fn blend_sprite(img: &mut RgbaImage, sprite: &[u8], size: u32, cx: i32, cy: i32) {
+    let (img_w, img_h) = img.dimensions();
+    let half = (size / 2) as i32;
+    let raw = img.as_mut();
+
+    for sy in 0..size as i32 {
+        let py = cy - half + sy;
+        if py < 0 || py >= img_h as i32 {
+            continue;
+        }
+        let s_row = (sy as u32 * size) as usize * 4;
+        let i_row = (py as u32 * img_w) as usize * 4;
+
+        for sx in 0..size as i32 {
+            let px = cx - half + sx;
+            if px < 0 || px >= img_w as i32 {
+                continue;
+            }
+            let s_idx = s_row + sx as usize * 4;
+            let a = sprite[s_idx + 3];
+            if a == 0 {
+                continue;
+            }
+            let i_idx = i_row + px as usize * 4;
+            if a == 255 {
+                raw[i_idx] = sprite[s_idx];
+                raw[i_idx + 1] = sprite[s_idx + 1];
+                raw[i_idx + 2] = sprite[s_idx + 2];
+                raw[i_idx + 3] = 255;
+            } else {
+                let af = a as f32 / 255.0;
+                let inv = 1.0 - af;
+                raw[i_idx] = (sprite[s_idx] as f32 * af + raw[i_idx] as f32 * inv) as u8;
+                raw[i_idx + 1] =
+                    (sprite[s_idx + 1] as f32 * af + raw[i_idx + 1] as f32 * inv) as u8;
+                raw[i_idx + 2] =
+                    (sprite[s_idx + 2] as f32 * af + raw[i_idx + 2] as f32 * inv) as u8;
+                // dst alpha left as-is (canvas stays opaque)
+            }
+        }
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
