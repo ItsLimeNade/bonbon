@@ -30,7 +30,7 @@ pub struct LayoutConfig {
     pub height: u32,
     /// If None, auto-sized for the unit caption (~56 * scale, ~78 for dual units).
     pub margin_top: Option<f32>,
-    /// If None, defaults to 84.0 * scale
+    /// If None, defaults to 104.0 * scale
     pub margin_bottom: Option<f32>,
     /// If None, auto-sized for the Y-axis labels (~110 * scale, ~120 for mmol/L).
     pub margin_left: Option<f32>,
@@ -421,7 +421,7 @@ impl<'a> GlucoseGraphBuilder<'a> {
         let left_default = if wide_y { 120.0 } else { 110.0 };
 
         let m_top = self.layout.margin_top.unwrap_or(top_default * s);
-        let m_bottom = self.layout.margin_bottom.unwrap_or(84.0 * s);
+        let m_bottom = self.layout.margin_bottom.unwrap_or(104.0 * s);
         let m_left = self.layout.margin_left.unwrap_or(left_default * s);
         let m_right = self.layout.margin_right.unwrap_or(32.0 * s);
 
@@ -525,7 +525,7 @@ impl<'a> GlucoseGraphBuilder<'a> {
                             |(min_a, max_a), (min_b, max_b)| (min_a.min(min_b), max_a.max(max_b)),
                         );
 
-                    let calc_max = ((max_sgv + 20.0) / 10.0).ceil() * 10.0;
+                    let calc_max = max_sgv;
                     let calc_min = ((min_sgv - 20.0) / 10.0).floor() * 10.0;
 
                     let view_min = calc_min.min(default_min);
@@ -567,7 +567,12 @@ impl<'a> GlucoseGraphBuilder<'a> {
         let [lr, lg, lb, _] = self.theme.axis_lines.0;
         let stripe_color = Rgba([lr, lg, lb, 30]);
 
+        let draw_top = is_round_ten(ctx.y_max);
+
         for i in 0..=steps {
+            if i == steps && !draw_top {
+                continue;
+            }
             let val = ctx.y_min + (i as f32 * step_size);
             let y = ctx.project_y(val);
             blend_fast_rect(
@@ -1377,6 +1382,11 @@ impl<'a> GlucoseGraphBuilder<'a> {
 fn text_dimensions(text: &str, size: f32, _font: &FontRef) -> (f32, f32) {
     let width = text.len() as f32 * (size * 0.6);
     (width, size)
+}
+
+/// True when `v` lands on a multiple of 10 (within rounding noise).
+fn is_round_ten(v: f32) -> bool {
+    (v - (v / 10.0).round() * 10.0).abs() < 0.5
 }
 
 fn min_max(values: &[f32]) -> (f32, f32) {
