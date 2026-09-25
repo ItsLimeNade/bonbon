@@ -8,16 +8,16 @@ use crate::models::{
 use crate::theme::Theme;
 use crate::utils::color::darken_color;
 use crate::utils::drawing::{
-    blend_fast_rect, blend_sprite, create_aa_circle_sprite, draw_dashed_horizontal_line,
-    draw_filled_rounded_rect, draw_smart_circle, draw_smart_triangle, draw_text_with_outline,
+    blend_fast_rect, blend_pixel, blend_sprite, canvas_with_rounded_rect, create_aa_circle_sprite,
+    draw_dashed_horizontal_line, draw_smart_circle, draw_smart_triangle, Sprite,
 };
+use crate::utils::text::{draw_text as draw_text_mut, draw_text_with_outline};
 
 use ab_glyph::{FontRef, PxScale};
 use chrono::{Duration, Utc};
 use chrono_tz::Tz;
 use image::{Rgba, RgbaImage};
-use imageproc::drawing::{draw_filled_circle_mut, draw_line_segment_mut, draw_text_mut};
-use rayon::prelude::*;
+use imageproc::drawing::{draw_filled_circle_mut, draw_line_segment_mut};
 
 /// Gap (before scaling) between the plot area and the rounded panel that frames
 /// it. Shared by the panel and the axis labels so the exterior lines up.
@@ -309,16 +309,18 @@ impl<'a> GlucoseGraphBuilder<'a> {
     /// Builds the final image, returning an ImageBuffer.
     pub fn build(mut self) -> Result<RgbaImage, Box<dyn std::error::Error>> {
         let font = FontRef::try_from_slice(self.font)?;
-        let mut img =
-            RgbaImage::from_pixel(self.layout.width, self.layout.height, self.theme.background);
 
         // Calculate the graph's viewport first, this allows for a scalable margin system
         // and correct entry positionning later on.
         let viewport = self.calculate_viewport();
 
+        // Flat background, framed plot panel included (the same soft panel the
+        // bg/TIR cards use).
+        let mut img = self.new_canvas(&viewport);
+
         // Here we're sorting the entries with worst-case scenario of O(n * log(n)) for the time complexity.
         // Sorting them will allow us to correctly fetch the graph's time span.
-        self.entries.par_sort_unstable_by_key(|e| e.date);
+        self.entries.sort_unstable_by_key(|e| e.date);
         let (start_time, end_time) = self.determine_time_range()?;
         let time_span_secs = (end_time - start_time).num_seconds().max(1) as f32;
 
@@ -342,10 +344,6 @@ impl<'a> GlucoseGraphBuilder<'a> {
             y_max,
             font: &font,
         };
-
-        // Frame the plot with the same soft panel the bg/TIR cards use, over a
-        // clean flat background.
-        self.draw_plot_panel(&mut img, &ctx);
 
         // Faint gridlines, soft target dashes, then the axis annotations.
         self.draw_value_gridlines(&mut img, &ctx);
@@ -519,11 +517,7 @@ impl<'a> GlucoseGraphBuilder<'a> {
                 if visible_entries.is_empty() {
                     (clamp_min, clamp_max)
                 } else {
-                    let (min_sgv, max_sgv) =
-                        visible_entries.par_iter().map(|e| (e.sgv, e.sgv)).reduce(
-                            || (f32::MAX, f32::MIN),
-                            |(min_a, max_a), (min_b, max_b)| (min_a.min(min_b), max_a.max(max_b)),
-                        );
+                    let (min_sgv, max_sgv) = min_max(visible_entries.iter().map(|e| e.sgv));
 
                     let calc_max = max_sgv;
                     let calc_min = ((min_sgv - 20.0) / 10.0).floor() * 10.0;
@@ -537,22 +531,29 @@ impl<'a> GlucoseGraphBuilder<'a> {
         }
     }
 
-    /// Draws the rounded panel that frames the plot area. This replaces the old
-    /// protruding L-shaped axis spines (the main "unstyled plot" tell) with the
-    /// same soft raised-card surface the other charts use.
-    fn draw_plot_panel(&self, img: &mut RgbaImage, ctx: &RenderContext) {
-        let s = ctx.viewport.s;
+    /// Creates the canvas: flat background plus the rounded panel that frames
+    /// the plot area. The panel replaces the old protruding L-shaped axis
+    /// spines (the main "unstyled plot" tell) with the same soft raised-card
+    /// surface the other charts use.
+    ///
+    /// The panel is a translucent tint over a flat background, so it is one
+    /// known color: the canvas is written in a single pass with it rather than
+    /// filled and then blended pixel by pixel over most of its area.
+    fn new_canvas(&self, viewport: &GraphViewport) -> RgbaImage {
+        let s = viewport.s;
         let pad = PANEL_PAD * s;
         let [gr, gg, gb, _] = self.theme.grid_major.0;
-        draw_filled_rounded_rect(
-            img,
-            (ctx.viewport.plot_left - pad) as i32,
-            (ctx.viewport.plot_top - pad) as i32,
-            (ctx.viewport.plot_w + 2.0 * pad) as u32,
-            (ctx.viewport.plot_h + 2.0 * pad) as u32,
+        canvas_with_rounded_rect(
+            self.layout.width,
+            self.layout.height,
+            self.theme.background,
+            (viewport.plot_left - pad) as i32,
+            (viewport.plot_top - pad) as i32,
+            (viewport.plot_w + 2.0 * pad) as u32,
+            (viewport.plot_h + 2.0 * pad) as u32,
             (18.0 * s) as i32,
-            Rgba([gr, gg, gb, 110]),
-        );
+            blend_pixel(self.theme.background, Rgba([gr, gg, gb, 110])),
+        )
     }
 
     /// Draws faint horizontal gridlines at each Y-axis value tick. Step count
@@ -920,7 +921,7 @@ impl<'a> GlucoseGraphBuilder<'a> {
     ) -> Vec<&GraphTreatment> {
         let mut visible: Vec<&GraphTreatment> = self
             .treatments
-            .par_iter()
+            .iter()
             .filter(|t| t.date >= start && t.date <= end)
             .collect();
         visible.sort_by_key(|t| t.date);
@@ -950,15 +951,14 @@ impl<'a> GlucoseGraphBuilder<'a> {
                 let dark_insulin = darken_color(self.theme.insulin, 0.6);
                 let dark_carbs = darken_color(self.theme.carbs, 0.6);
 
-                let all_ins_values: Vec<f32> = treatments
-                    .par_iter()
-                    .filter_map(|t| t.insulin)
-                    .filter(|&v| v > self.microbolus_threshold)
-                    .collect();
-                let all_carb_values: Vec<f32> = treatments.iter().filter_map(|t| t.carbs).collect();
-
-                let (ins_min_val, ins_max_val) = min_max(&all_ins_values);
-                let (carb_min_val, carb_max_val) = min_max(&all_carb_values);
+                let (ins_min_val, ins_max_val) = min_max(
+                    treatments
+                        .iter()
+                        .filter_map(|t| t.insulin)
+                        .filter(|&v| v > self.microbolus_threshold),
+                );
+                let (carb_min_val, carb_max_val) =
+                    min_max(treatments.iter().filter_map(|t| t.carbs));
 
                 let ins_base_max = (22.0 * 2.0 / 3.0) * ctx.viewport.s;
                 let ins_base_min = (6.0 * 5.0 / 3.0) * ctx.viewport.s;
@@ -970,7 +970,7 @@ impl<'a> GlucoseGraphBuilder<'a> {
                 let mut text_regions: Vec<(i32, i32, i32, i32)> = Vec::new();
                 let margin_overlap = 4.0 * ctx.viewport.s;
 
-                let overlap_targets = vec![
+                let overlap_targets = [
                     self.theme.insulin,
                     dark_insulin,
                     self.theme.carbs,
@@ -979,11 +979,7 @@ impl<'a> GlucoseGraphBuilder<'a> {
 
                 for t in treatments {
                     let x = ctx.project_x(t.date);
-                    let closest = self
-                        .entries
-                        .par_iter()
-                        .min_by_key(|e| (e.date.timestamp() - t.date.timestamp()).abs());
-                    let base_y = if let Some(entry) = closest {
+                    let base_y = if let Some(entry) = closest_entry(&self.entries, t.date) {
                         ctx.project_y(entry.sgv)
                     } else {
                         ctx.viewport.plot_bottom
@@ -1149,18 +1145,17 @@ impl<'a> GlucoseGraphBuilder<'a> {
                     groups.push(vec![*t]);
                 }
 
-                for group in groups {
-                    let x_sum: f32 = group.par_iter().map(|t| ctx.project_x(t.date)).sum();
+                for mut group in groups {
+                    let x_sum: f32 = group.iter().map(|t| ctx.project_x(t.date)).sum();
                     let x_center = x_sum / group.len() as f32;
-                    let mut sorted_group = group.clone();
-                    sorted_group.sort_by_key(|t| std::cmp::Reverse(t.date));
+                    group.sort_by_key(|t| std::cmp::Reverse(t.date));
 
                     struct StackItem {
                         text: String,
                         color: Rgba<u8>,
                     }
                     let mut items = Vec::new();
-                    for t in sorted_group {
+                    for t in group {
                         if let Some(ins) = t.insulin {
                             items.push(StackItem {
                                 text: format!("{:.1}u", ins),
@@ -1276,8 +1271,8 @@ impl<'a> GlucoseGraphBuilder<'a> {
             .windows(2)
             .map(|w| (w[1].date - w[0].date).num_seconds())
             .collect();
-        gaps.sort_unstable();
-        let median_gap = gaps[gaps.len() / 2].max(1);
+        let mid = gaps.len() / 2;
+        let median_gap = (*gaps.select_nth_unstable(mid).1).max(1);
         let max_gap = (median_gap as f32 * 2.5) as i64;
 
         // Line a little thinner than the markers so the dots still lead.
@@ -1285,10 +1280,10 @@ impl<'a> GlucoseGraphBuilder<'a> {
         let point_radius = (base_point_radius + 1.0) * ctx.viewport.s;
         let trace_half = (point_radius * 0.45).round().max(1.0) as i32;
 
-        let (size, sp_high) = create_aa_circle_sprite(trace_half, self.theme.glucose_high);
-        let (_, sp_low) = create_aa_circle_sprite(trace_half, self.theme.glucose_low);
-        let (_, sp_range) = create_aa_circle_sprite(trace_half, self.theme.glucose_in_range);
-        let pick = |sgv: f32| -> &[u8] {
+        let sp_high = create_aa_circle_sprite(trace_half, self.theme.glucose_high);
+        let sp_low = create_aa_circle_sprite(trace_half, self.theme.glucose_low);
+        let sp_range = create_aa_circle_sprite(trace_half, self.theme.glucose_in_range);
+        let pick = |sgv: f32| -> &Sprite {
             if sgv > self.target_high {
                 &sp_high
             } else if sgv < self.target_low {
@@ -1323,7 +1318,7 @@ impl<'a> GlucoseGraphBuilder<'a> {
                     continue;
                 }
                 let sgv = a.sgv + (b.sgv - a.sgv) * t;
-                blend_sprite(img, pick(sgv), size, px, py);
+                blend_sprite(img, pick(sgv), px, py);
                 last_stamp = Some((px, py));
             }
         }
@@ -1340,10 +1335,9 @@ impl<'a> GlucoseGraphBuilder<'a> {
         let point_radius = (base_point_radius + 1.0) * ctx.viewport.s;
         let radius_i32 = point_radius.max(1.0) as i32;
 
-        let (sprite_size, sprite_high) =
-            create_aa_circle_sprite(radius_i32, self.theme.glucose_high);
-        let (_, sprite_low) = create_aa_circle_sprite(radius_i32, self.theme.glucose_low);
-        let (_, sprite_range) = create_aa_circle_sprite(radius_i32, self.theme.glucose_in_range);
+        let sprite_high = create_aa_circle_sprite(radius_i32, self.theme.glucose_high);
+        let sprite_low = create_aa_circle_sprite(radius_i32, self.theme.glucose_low);
+        let sprite_range = create_aa_circle_sprite(radius_i32, self.theme.glucose_in_range);
 
         let mut last_draw_pos: Option<(i32, i32)> = None;
         let min_dist_sq = (point_radius * 0.5).powf(2.0);
@@ -1368,7 +1362,7 @@ impl<'a> GlucoseGraphBuilder<'a> {
                 &sprite_range
             };
 
-            blend_sprite(img, sprite, sprite_size, ix, iy);
+            blend_sprite(img, sprite, ix, iy);
             last_draw_pos = Some((ix, iy));
         }
     }
@@ -1389,17 +1383,36 @@ fn is_round_ten(v: f32) -> bool {
     (v - (v / 10.0).round() * 10.0).abs() < 0.5
 }
 
-fn min_max(values: &[f32]) -> (f32, f32) {
+/// `(min, max)` of `values`, or `(f32::MAX, f32::MIN)` when empty.
+///
+/// Deliberately sequential: these are at most a few thousand floats, far too
+/// little work to pay for waking a thread pool.
+fn min_max(values: impl IntoIterator<Item = f32>) -> (f32, f32) {
     values
-        .par_iter()
-        .fold(
-            || (f32::MAX, f32::MIN),
-            |(min, max), &v| (min.min(v), max.max(v)),
-        )
-        .reduce(
-            || (f32::MAX, f32::MIN), // Identity for the reduction
-            |(min_a, max_a), (min_b, max_b)| (min_a.min(min_b), max_a.max(max_b)),
-        )
+        .into_iter()
+        .fold((f32::MAX, f32::MIN), |(min, max), v| {
+            (min.min(v), max.max(v))
+        })
+}
+
+/// The entry closest in time to `t` (whole-second resolution, earliest entry
+/// on ties), found by binary search in `entries`, which must be sorted by date.
+fn closest_entry(entries: &[GraphEntry], t: chrono::DateTime<Utc>) -> Option<&GraphEntry> {
+    let ts = t.timestamp();
+    let key = |e: &GraphEntry| e.date.timestamp();
+    // First entry at or after `t`: the closest one from the right.
+    let idx = entries.partition_point(|e| key(e) < ts);
+    // Closest from the left is the last timestamp before `t`; take the first
+    // entry sharing it so ties resolve to the earliest entry.
+    let before = idx.checked_sub(1).map(|i| {
+        let lts = key(&entries[i]);
+        &entries[entries.partition_point(|e| key(e) < lts)]
+    });
+    match (before, entries.get(idx)) {
+        (Some(l), Some(r)) if ts - key(l) <= key(r) - ts => Some(l),
+        (_, Some(r)) => Some(r),
+        (l, None) => l,
+    }
 }
 
 fn calculate_dynamic_size(

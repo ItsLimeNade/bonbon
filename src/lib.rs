@@ -6,7 +6,7 @@
 //!
 //! ## Features
 //!
-//! * **High Performance**: Leverages `rayon` for parallel data processing and optimized sprite-based rendering.
+//! * **High Performance**: Tight, allocation-light pixel loops and pre-computed sprites and glyph masks, with no thread pool to spin up.
 //! * **Dynamic Scaling**: Automatically adjusts Y-axis bounds based on data range.
 //! * **Flexible Unit Support**: Native support for mg/dL and mmol/L, including dual-unit display modes.
 //! * **Treatment Visualization**: Render insulin boluses, carbohydrate intake, and manual fingerstick calibrations.

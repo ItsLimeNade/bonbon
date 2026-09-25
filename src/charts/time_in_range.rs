@@ -1,12 +1,11 @@
 use ab_glyph::{FontRef, PxScale};
 use image::{Rgba, RgbaImage};
-use imageproc::drawing::draw_text_mut;
 
 use crate::models::{GraphEntry, UnitDisplay, UnitPreference};
 use crate::theme::Theme;
 use crate::utils::color::darken_color;
-use crate::utils::drawing::{draw_fast_rect, draw_filled_rounded_rect};
-use crate::utils::text::text_w;
+use crate::utils::drawing::{card_canvas, draw_fast_rect, draw_filled_rounded_rect};
+use crate::utils::text::{draw_text as draw_text_mut, text_w};
 
 const MGDL_PER_MMOL: f32 = 18.0182;
 
@@ -305,10 +304,13 @@ impl<'a> TimeInRangeBuilder<'a> {
 
         let w = (640.0 * s) as u32;
         let h = (400.0 * s) as u32;
-        let mut img = RgbaImage::from_pixel(w, h, self.theme.background);
-
-        draw_bg_pattern(&mut img, &self.theme, w, h, s);
-        draw_gradient(&mut img, dominant_color(&self.theme, &stats), w, h);
+        let mut img = card_canvas(
+            w,
+            h,
+            self.theme.background,
+            dominant_color(&self.theme, &stats),
+            s,
+        );
 
         #[cfg(feature = "beetroot")]
         if let Some(set) = self.sticker_set.as_ref() {
@@ -426,52 +428,6 @@ fn dominant_status(stats: &TirStats) -> crate::charts::bg_card::GlucoseStatus {
         GlucoseStatus::High
     } else {
         GlucoseStatus::Low
-    }
-}
-
-/// Subtle grid pattern drawn over the background before any content.
-/// Mirrors the bg card so the family looks related.
-fn draw_bg_pattern(img: &mut RgbaImage, theme: &Theme, w: u32, h: u32, s: f32) {
-    let spacing = (64.0 * s) as u32;
-    let [br, bg, bb, ba] = theme.background.0;
-    let line = Rgba([
-        br.saturating_sub(7),
-        bg.saturating_sub(7),
-        bb.saturating_sub(7),
-        ba,
-    ]);
-    let mut x = spacing;
-    while x < w {
-        for y in 0..h {
-            img.put_pixel(x, y, line);
-        }
-        x += spacing;
-    }
-    let mut y = spacing;
-    while y < h {
-        for x in 0..w {
-            img.put_pixel(x, y, line);
-        }
-        y += spacing;
-    }
-}
-
-/// Ambient gradient fading from the top, tinted by the dominant band.
-fn draw_gradient(img: &mut RgbaImage, c: Rgba<u8>, w: u32, h: u32) {
-    let gh = (h as f32 * 0.5) as u32;
-    for y in 0..gh {
-        let a = 55.0_f32 * (1.0 - y as f32 / gh as f32) / 255.0;
-        let inv = 1.0 - a;
-        for x in 0..w {
-            let px = img.get_pixel_mut(x, y);
-            let [dr, dg, db, da] = px.0;
-            px.0 = [
-                (c[0] as f32 * a + dr as f32 * inv) as u8,
-                (c[1] as f32 * a + dg as f32 * inv) as u8,
-                (c[2] as f32 * a + db as f32 * inv) as u8,
-                da,
-            ];
-        }
     }
 }
 

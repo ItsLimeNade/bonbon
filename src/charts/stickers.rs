@@ -7,6 +7,7 @@ use image::{DynamicImage, Rgba, RgbaImage};
 
 use crate::charts::bg_card::GlucoseStatus;
 use crate::models::GraphEntry;
+use crate::utils::drawing::blend_image;
 
 /// Category used to associate a sticker with a reading.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -250,15 +251,15 @@ fn resize_sticker(src: &DynamicImage, size: u32) -> DynamicImage {
 /// 45°, but integer rounding + bilinear interpolation can still shave a
 /// pixel off the corner. We therefore pre-pad by `ceil(size × √2)` PLUS
 /// a `ROT_MARGIN` of 8px on each side.
-fn rotate_sticker(src: &DynamicImage, angle_rad: f32) -> DynamicImage {
+fn rotate_sticker(src: DynamicImage, angle_rad: f32) -> RgbaImage {
     use imageproc::geometric_transformations::{rotate_about_center, Interpolation};
     const ROT_MARGIN: u32 = 8;
 
-    let src_rgba = src.to_rgba8();
+    let src_rgba = src.into_rgba8();
     let w = src_rgba.width();
     let h = src_rgba.height();
     if w == 0 || h == 0 {
-        return src.clone();
+        return src_rgba;
     }
 
     let pad_w = ((w as f32) * std::f32::consts::SQRT_2).ceil() as u32 + ROT_MARGIN * 2;
@@ -274,46 +275,24 @@ fn rotate_sticker(src: &DynamicImage, angle_rad: f32) -> DynamicImage {
             .expect("padded buffer is sized to fit the source");
     }
 
-    let rotated = rotate_about_center(
+    rotate_about_center(
         &padded,
         angle_rad,
         Interpolation::Bilinear,
         Rgba([0, 0, 0, 0]),
-    );
-    DynamicImage::ImageRgba8(rotated)
+    )
 }
 
 /// Alpha-blend a sticker onto `img` at top-left `(x, y)`. `alpha_scale`
 /// is a multiplier on the sticker's own per-pixel alpha (in `[0, 1]`),
 /// so passing `1.0` is a normal blit and `0.5` makes the sticker half
 /// as opaque overall.
-fn blit(img: &mut RgbaImage, sticker: &DynamicImage, x: i32, y: i32, alpha_scale: f32) {
+fn blit(img: &mut RgbaImage, sticker: &RgbaImage, x: i32, y: i32, alpha_scale: f32) {
     let alpha_scale = alpha_scale.clamp(0.0, 1.0);
     if alpha_scale == 0.0 {
         return;
     }
-    let rgba = sticker.to_rgba8();
-    let img_w = img.width() as i32;
-    let img_h = img.height() as i32;
-    for (sx, sy, pixel) in rgba.enumerate_pixels() {
-        let px = x + sx as i32;
-        let py = y + sy as i32;
-        if px < 0 || py < 0 || px >= img_w || py >= img_h {
-            continue;
-        }
-        let alpha = (pixel.0[3] as f32 / 255.0) * alpha_scale;
-        if alpha == 0.0 {
-            continue;
-        }
-        let inv = 1.0 - alpha;
-        let dst = img.get_pixel_mut(px as u32, py as u32);
-        dst.0 = [
-            (pixel.0[0] as f32 * alpha + dst.0[0] as f32 * inv) as u8,
-            (pixel.0[1] as f32 * alpha + dst.0[1] as f32 * inv) as u8,
-            (pixel.0[2] as f32 * alpha + dst.0[2] as f32 * inv) as u8,
-            dst.0[3],
-        ];
-    }
+    blend_image(img, sticker, x, y, alpha_scale);
 }
 
 pub(crate) struct Bounds {
@@ -482,7 +461,7 @@ pub(crate) fn draw_on_graph(
 
     // Decoded+resized pixels per sticker index. Failures are cached as
     // `None` so a broken source is only tried once.
-    let mut cache: HashMap<usize, Option<DynamicImage>> = HashMap::new();
+    let mut cache: HashMap<usize, Option<RgbaImage>> = HashMap::new();
 
     let mut placed: HashMap<StickerCategory, usize> = HashMap::new();
     let mut placed_positions: Vec<(f32, f32)> = Vec::new();
@@ -563,7 +542,7 @@ pub(crate) fn draw_on_graph(
                 .source
                 .load()
                 .ok()
-                .map(|d| resize_sticker(&d, sticker_size))
+                .map(|d| resize_sticker(&d, sticker_size).into_rgba8())
         });
         let Some(bitmap) = bitmap else { continue };
 
@@ -663,8 +642,7 @@ pub(crate) fn draw_on_card(
         let size = (base_size * size_scale).round().max(8.0) as u32;
         let angle = rng.range(-std::f32::consts::PI, std::f32::consts::PI);
 
-        let resized = resize_sticker(decoded, size);
-        let rotated = rotate_sticker(&resized, angle);
+        let rotated = rotate_sticker(resize_sticker(decoded, size), angle);
 
         let w = rotated.width() as f32;
         let h = rotated.height() as f32;
