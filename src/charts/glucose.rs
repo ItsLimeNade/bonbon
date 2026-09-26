@@ -23,6 +23,17 @@ use imageproc::drawing::{draw_filled_circle_mut, draw_line_segment_mut};
 /// it. Shared by the panel and the axis labels so the exterior lines up.
 const PANEL_PAD: f32 = 16.0;
 
+/// Most labelled values on the glucose Y axis; any more lines and the plot
+/// gets hard to read.
+const MAX_VALUE_TICKS: usize = 7;
+
+/// Steps between labelled values on the glucose Y axis, finest first. 30 sits
+/// between 20 and 50 so a typical day gets 5 or 6 lines rather than 9 or 4.
+const MGDL_STEPS: [f32; 11] = [
+    1.0, 2.0, 5.0, 10.0, 20.0, 30.0, 50.0, 100.0, 200.0, 500.0, 1000.0,
+];
+const MMOL_STEPS: [f32; 9] = [0.1, 0.2, 0.5, 1.0, 2.0, 5.0, 10.0, 20.0, 50.0];
+
 /// Configuration for the visual layout of the graph.
 #[derive(Clone, Debug)]
 pub struct LayoutConfig {
@@ -556,25 +567,18 @@ impl<'a> GlucoseGraphBuilder<'a> {
         )
     }
 
-    /// Draws faint horizontal gridlines at each Y-axis value tick. Step count
-    /// mirrors [`draw_labels_and_units`] so lines and labels stay in lockstep.
+    /// Draws faint horizontal gridlines at each Y-axis tick. The ticks come
+    /// from [`Self::value_ticks`], like the labels [`Self::draw_labels_and_units`]
+    /// draws, so every label sits on the line of the value it names.
     ///
     /// Lines are a low-alpha blend of `axis_lines` over the panel, so they give
     /// the eye a reference without ever competing with the data points.
     fn draw_value_gridlines(&self, img: &mut RgbaImage, ctx: &RenderContext) {
-        let steps = 6;
-        let step_size = (ctx.y_max - ctx.y_min) / (steps as f32);
         let grid_thickness = (1.0 * ctx.viewport.s).ceil() as u32;
         let [lr, lg, lb, _] = self.theme.axis_lines.0;
         let stripe_color = Rgba([lr, lg, lb, 30]);
 
-        let draw_top = is_round_ten(ctx.y_max);
-
-        for i in 0..=steps {
-            if i == steps && !draw_top {
-                continue;
-            }
-            let val = ctx.y_min + (i as f32 * step_size);
+        for val in self.value_ticks(&ctx.viewport, ctx.y_min, ctx.y_max) {
             let y = ctx.project_y(val);
             blend_fast_rect(
                 img,
@@ -851,35 +855,9 @@ impl<'a> GlucoseGraphBuilder<'a> {
             }
         }
 
-        let steps = 6;
-        let step_size = (ctx.y_max - ctx.y_min) / (steps as f32);
-        for i in 0..=steps {
-            let val = ctx.y_min + (i as f32 * step_size);
+        for val in self.value_ticks(&ctx.viewport, ctx.y_min, ctx.y_max) {
             let y_pos = ctx.project_y(val);
-
-            let (main_text, sub_text) = match self.unit_display {
-                UnitDisplay::MgDl => {
-                    let rounded = (val / 10.0).ceil() * 10.0;
-                    (format!("{:.0}", rounded), None)
-                }
-                UnitDisplay::MmolL => {
-                    let rounded = ((val / 18.0) * 2.0).ceil() / 2.0;
-                    (format!("{:.1}", rounded), None)
-                }
-                UnitDisplay::Dual { primary } => match primary {
-                    UnitPreference::MgDl => {
-                        let rounded = (val / 10.0).ceil() * 10.0;
-                        (
-                            format!("{:.0}", rounded),
-                            Some(format!("{:.1}", val / 18.0)),
-                        )
-                    }
-                    UnitPreference::MmolL => {
-                        let rounded = ((val / 18.0) * 2.0).ceil() / 2.0;
-                        (format!("{:.1}", rounded), Some(format!("{:.0}", val)))
-                    }
-                },
-            };
+            let (main_text, sub_text) = self.tick_labels(val);
 
             let main_dim = text_dimensions(&main_text, font_size_md, ctx.font);
             let main_tx = (label_right - main_dim.0) as i32;
@@ -910,6 +888,60 @@ impl<'a> GlucoseGraphBuilder<'a> {
                     &sub,
                 );
             }
+        }
+    }
+
+    /// The values (in mg/dL) that get a gridline and a label on the Y axis:
+    /// every multiple of a round step inside `[y_min, y_max]`, e.g. 30 mg/dL or
+    /// 2 mmol/L depending on the primary unit. The step is the finest that
+    /// keeps the labels well apart without crowding the axis.
+    fn value_ticks(&self, viewport: &GraphViewport, y_min: f32, y_max: f32) -> Vec<f32> {
+        // mg/dL per primary unit, and that unit's steps.
+        let (per_unit, steps): (f32, &[f32]) = match self.unit_display {
+            UnitDisplay::MgDl
+            | UnitDisplay::Dual {
+                primary: UnitPreference::MgDl,
+            } => (1.0, &MGDL_STEPS),
+            UnitDisplay::MmolL
+            | UnitDisplay::Dual {
+                primary: UnitPreference::MmolL,
+            } => (18.0, &MMOL_STEPS),
+        };
+        // A label is 31px tall before scaling, 52px with the converted value
+        // under it in dual mode; keep at least a label's height between
+        // neighbours.
+        let min_gap = match self.unit_display {
+            UnitDisplay::Dual { .. } => 52.0 + 31.0,
+            _ => 31.0 + 31.0,
+        } * viewport.s;
+        let px_per_unit = viewport.plot_h / (y_max - y_min) * per_unit;
+
+        round_ticks(
+            y_min / per_unit,
+            y_max / per_unit,
+            steps,
+            min_gap / px_per_unit,
+            MAX_VALUE_TICKS,
+        )
+        .into_iter()
+        .map(|v| v * per_unit)
+        .collect()
+    }
+
+    /// The label of the Y-axis tick at `val` mg/dL, in the primary unit, and
+    /// in dual mode the same value in the other unit to go under it.
+    fn tick_labels(&self, val: f32) -> (String, Option<String>) {
+        let mgdl = format!("{:.0}", val);
+        let mmol = format!("{:.1}", val / 18.0);
+        match self.unit_display {
+            UnitDisplay::MgDl => (mgdl, None),
+            UnitDisplay::MmolL => (mmol, None),
+            UnitDisplay::Dual {
+                primary: UnitPreference::MgDl,
+            } => (mgdl, Some(mmol)),
+            UnitDisplay::Dual {
+                primary: UnitPreference::MmolL,
+            } => (mmol, Some(mgdl)),
         }
     }
 
@@ -1378,9 +1410,23 @@ fn text_dimensions(text: &str, size: f32, _font: &FontRef) -> (f32, f32) {
     (width, size)
 }
 
-/// True when `v` lands on a multiple of 10 (within rounding noise).
-fn is_round_ten(v: f32) -> bool {
-    (v - (v / 10.0).round() * 10.0).abs() < 0.5
+/// The multiples of one of `steps` (finest first) that lie in `[lo, hi]`,
+/// ascending. The step is the finest that is at least `min_step` and leaves
+/// at most `max_ticks` multiples; with no such step there are no ticks.
+fn round_ticks(lo: f32, hi: f32, steps: &[f32], min_step: f32, max_ticks: usize) -> Vec<f32> {
+    steps
+        .iter()
+        .copied()
+        .filter(|&step| step >= min_step)
+        .find_map(|step| {
+            // A little slack so a bound that is itself a multiple of the step
+            // keeps its tick despite float noise.
+            let first = (lo / step - 1e-3).ceil() as i64;
+            let last = (hi / step + 1e-3).floor() as i64;
+            (last - first < max_ticks as i64)
+                .then(|| (first..=last).map(|k| k as f32 * step).collect())
+        })
+        .unwrap_or_default()
 }
 
 /// `(min, max)` of `values`, or `(f32::MAX, f32::MIN)` when empty.
@@ -1431,4 +1477,162 @@ fn calculate_dynamic_size(
 
 fn rects_intersect(a: (i32, i32, i32, i32), b: (i32, i32, i32, i32)) -> bool {
     a.0 < b.2 && a.2 > b.0 && a.1 < b.3 && a.3 > b.1
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::TimeZone;
+
+    fn at(minutes: i64) -> chrono::DateTime<Utc> {
+        Utc.with_ymd_and_hms(2026, 1, 1, 0, 0, 0).unwrap() + Duration::minutes(minutes)
+    }
+
+    fn graph() -> GlucoseGraphBuilder<'static> {
+        let entries: Vec<GraphEntry> = (0..=36)
+            .map(|i| GraphEntry {
+                sgv: 110.0 + i as f32,
+                date: at(i * 5),
+            })
+            .collect();
+        let treatments = vec![GraphTreatment {
+            insulin: Some(3.0),
+            carbs: Some(40.0),
+            mbg: None,
+            date: at(30),
+            is_isf: false,
+        }];
+        GlucoseGraphBuilder::new()
+            .with_layout(LayoutConfig {
+                width: 600,
+                height: 400,
+                ..Default::default()
+            })
+            .with_entries(entries)
+            .with_treatments(treatments)
+    }
+
+    #[test]
+    fn round_ticks_take_the_finest_step_that_fits() {
+        let every = |step: f32, ks: std::ops::RangeInclusive<i32>| -> Vec<f32> {
+            ks.map(|k| k as f32 * step).collect()
+        };
+        let mmol = (40.0 / 18.0, 200.0 / 18.0);
+        // Room for a label every 15 mg/dL: every 20 (10 is too tight).
+        let mg = round_ticks(40.0, 200.0, &MGDL_STEPS, 15.0, 10);
+        assert_eq!(mg, every(20.0, 2..=10));
+        // Nine ticks are too many: every 30.
+        let mg = round_ticks(40.0, 200.0, &MGDL_STEPS, 15.0, 7);
+        assert_eq!(mg, every(30.0, 2..=6));
+        // mmol/L goes from 1 straight to 2.
+        let mmol_ticks = round_ticks(mmol.0, mmol.1, &MMOL_STEPS, 0.6, 10);
+        assert_eq!(mmol_ticks, every(1.0, 3..=11));
+        let mmol_ticks = round_ticks(mmol.0, mmol.1, &MMOL_STEPS, 0.6, 7);
+        assert_eq!(mmol_ticks, every(2.0, 2..=5));
+        // Only multiples inside the range, bounds included when they are one.
+        let mg = round_ticks(65.0, 185.0, &MGDL_STEPS, 40.0, 10);
+        assert_eq!(mg, every(50.0, 2..=3));
+        let mg = round_ticks(50.0, 150.0, &MGDL_STEPS, 40.0, 10);
+        assert_eq!(mg, every(50.0, 1..=3));
+    }
+
+    #[test]
+    fn round_ticks_survive_degenerate_ranges() {
+        let ticks = |lo, hi, min_step| round_ticks(lo, hi, &MGDL_STEPS, min_step, 10);
+        assert_eq!(ticks(100.0, 100.0, 0.0), vec![100.0]);
+        assert!(ticks(200.0, 100.0, 1.0).is_empty());
+        assert!(ticks(100.0, 200.0, f32::INFINITY).is_empty());
+        assert!(ticks(100.0, 200.0, f32::NAN).is_empty());
+    }
+
+    #[test]
+    fn a_typical_day_gets_a_handful_of_lines() {
+        let at_1080 = |unit| {
+            let builder = graph()
+                .with_units(unit)
+                .with_layout(LayoutConfig::default());
+            builder.value_ticks(&builder.calculate_viewport(), 40.0, 200.0)
+        };
+        assert_eq!(
+            at_1080(UnitDisplay::MgDl),
+            [60.0, 90.0, 120.0, 150.0, 180.0]
+        );
+        // 4, 6, 8 and 10 mmol/L.
+        assert_eq!(at_1080(UnitDisplay::MmolL), [72.0, 108.0, 144.0, 180.0]);
+    }
+
+    #[test]
+    fn value_labels_name_their_gridlines() {
+        let units = [
+            UnitDisplay::MgDl,
+            UnitDisplay::MmolL,
+            UnitDisplay::Dual {
+                primary: UnitPreference::MgDl,
+            },
+            UnitDisplay::Dual {
+                primary: UnitPreference::MmolL,
+            },
+        ];
+        for unit in units {
+            let mmol_first = matches!(
+                unit,
+                UnitDisplay::MmolL
+                    | UnitDisplay::Dual {
+                        primary: UnitPreference::MmolL
+                    }
+            );
+            let dual = matches!(unit, UnitDisplay::Dual { .. });
+            for (width, height) in [(1920, 1080), (800, 450), (800, 800)] {
+                // A short plot too, as a large bottom margin leaves.
+                for short in [false, true] {
+                    let builder = graph().with_units(unit).with_layout(LayoutConfig {
+                        width,
+                        height,
+                        margin_bottom: short.then_some(height as f32 * 0.35),
+                        ..Default::default()
+                    });
+                    let vp = builder.calculate_viewport();
+                    for (y_min, y_max) in
+                        [(40.0, 200.0), (60.0, 200.0), (43.0, 213.0), (40.0, 400.0)]
+                    {
+                        let case =
+                            format!("{unit:?} {width}x{height} short: {short} {y_min}..{y_max}");
+                        let ticks = builder.value_ticks(&vp, y_min, y_max);
+                        assert!(
+                            (2..=MAX_VALUE_TICKS).contains(&ticks.len()),
+                            "{case}: {ticks:?}"
+                        );
+                        for &val in &ticks {
+                            assert!(val > y_min - 0.1 && val < y_max + 0.1, "{case}: {val}");
+                            let (main, sub) = builder.tick_labels(val);
+                            let (main, sub): (f32, Option<f32>) =
+                                (main.parse().unwrap(), sub.map(|s| s.parse().unwrap()));
+                            // The label is exactly the gridline's value...
+                            let main_mgdl = if mmol_first { main * 18.0 } else { main };
+                            assert!((main_mgdl - val).abs() < 1e-3, "{case}: {main} on {val}");
+                            // ...and the one under it the same value converted.
+                            if let Some(sub) = sub {
+                                let (sub_mgdl, precision) = if mmol_first {
+                                    (sub, 0.5)
+                                } else {
+                                    (sub * 18.0, 0.9)
+                                };
+                                assert!(
+                                    (sub_mgdl - val).abs() <= precision + 1e-3,
+                                    "{case}: {sub} under {val}"
+                                );
+                            }
+                        }
+                        // Labels (31px, 52px with the converted value) keep
+                        // at least a label's height between them.
+                        let label_h = if dual { 52.0 } else { 31.0 } * vp.s;
+                        for pair in ticks.windows(2) {
+                            let gap = (pair[1] - pair[0]) / (y_max - y_min) * vp.plot_h;
+                            assert!(gap >= label_h + 31.0 * vp.s - 1e-3, "{case}: {ticks:?}");
+                        }
+                    }
+                }
+            }
+        }
+    }
 }
