@@ -22,6 +22,7 @@ Bonbon is a fast, customizable graph rendering library designed for diabetes rel
 - **Dynamic Scaling**: Automatic Y-axis scaling based on glucose values
 - **Timezone Support**: Accurate time axis labels for any timezone
 - **Microbolus Filtering**: Configurable threshold to simplify SMB visualization
+- **Mini Graphs**: Optional insulin and carbs on board graphs under the glucose graph, from your treatments faded over a duration you set, or from your AID system's reported values
 - **BG Card**: Compact status card showing current glucose, trend, delta, IOB/COB, and a 3 hour sparkline
 - **Time in Range Card**: TIR summary with a stacked band bar, per-band durations and counts, plus average, SD, CV and GMI statistics
 
@@ -34,6 +35,36 @@ The Glucose Graph is a full-resolution chart rendering glucose entries over time
 <p align="center">
   <img src="assets/images/example_graph.png" alt="Example Glucose Graph" width="800">
 </p>
+
+### Mini graphs
+
+The glucose plot is always drawn. Under it you can stack none, one or several mini graphs, each in its own matching panel sharing the plot's time axis, in the order you add them. Two kinds are available: insulin on board (`MiniGraph::iob`) and carbs on board (`MiniGraph::cob`). Each is a line over a soft gradient area, labelled with its peak value, and every treatment is marked where it lands on the curve: a triangle per insulin dose (microboluses smallest) and a dot per carb entry, sized by amount.
+
+<p align="center">
+  <img src="assets/images/example_on_board.png" alt="Glucose Graph with IOB and COB mini graphs" width="800">
+</p>
+
+Give each one a duration: every treatment counts in full when given and fades in a straight line to nothing over that time, and the graph shows the total still on board. Use your duration of insulin action for IOB and your carb absorption time for COB.
+
+```rust
+let graph = GlucoseGraphBuilder::new()
+    .with_entries(entries)
+    .with_treatments(treatments)
+    .add_mini_graph(MiniGraph::iob(Duration::hours(4)))
+    .add_mini_graph(MiniGraph::cob(Duration::hours(3)))
+    .build()?;
+```
+
+With an AID system you can pass the values it reports instead (with the `cinnamon` feature, `on_board_from_device_statuses` reads them from Nightscout device statuses):
+
+```rust
+let (iob, cob) = on_board_from_device_statuses(&device_statuses);
+let graph = GlucoseGraphBuilder::new()
+    .with_entries(entries)
+    .add_mini_graph(MiniGraph::iob_reported(iob))
+    .add_mini_graph(MiniGraph::cob_reported(cob))
+    .build()?;
+```
 
 
 ---

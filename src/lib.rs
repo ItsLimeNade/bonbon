@@ -10,6 +10,7 @@
 //! * **Dynamic Scaling**: Automatically adjusts Y-axis bounds based on data range.
 //! * **Flexible Unit Support**: Native support for mg/dL and mmol/L, including dual-unit display modes.
 //! * **Treatment Visualization**: Render insulin boluses, carbohydrate intake, and manual fingerstick calibrations.
+//! * **Mini Graphs**: Optional insulin and carbs on board graphs under the glucose graph, from treatments or reported values.
 //! * **Theming**: Fully customizable color palettes.
 //!
 //! ## Architecture
@@ -40,7 +41,7 @@ pub mod prelude {
         builtin_icons, BgCardBuilder, BgCardData, GlucoseStatus, InfoPill, PillIcon, PillState,
         SparklinePoint,
     };
-    pub use crate::charts::glucose::{GlucoseGraphBuilder, LayoutConfig};
+    pub use crate::charts::glucose::{GlucoseGraphBuilder, LayoutConfig, MiniGraph, OnBoard};
     #[cfg(feature = "beetroot")]
     pub use crate::charts::stickers::{Sticker, StickerCategory, StickerSet, StickerSource};
     pub use crate::charts::time_in_range::{TimeInRangeBuilder, TirBand, TirStats, TirThresholds};

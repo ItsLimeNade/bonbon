@@ -92,3 +92,11 @@ pub enum TimeAxisMode {
     EquallyDistributed { count: u32 },
     // I'll add more in the future... Probably?
 }
+
+/// A timestamped value of a continuous series, such as insulin on board
+/// (units) or carbs on board (grams).
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+pub struct SeriesPoint {
+    pub value: f32,
+    pub date: DateTime<Utc>,
+}

@@ -328,23 +328,23 @@ pub fn draw_filled_rounded_rect(
     });
 }
 
-/// A new `width × height` canvas of `background` with a rounded rect filled
-/// with `fill`, written in one pass. Same pixels as `RgbaImage::from_pixel`
-/// followed by an opaque fill of the rect, without writing the rect's area
-/// twice.
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn canvas_with_rounded_rect(
+/// A new `width × height` canvas of `background` with rounded rects
+/// (`(x, y, w, h)`, all with corner `radius`) filled with `fill`, written in
+/// one pass. Same pixels as `RgbaImage::from_pixel` followed by an opaque fill
+/// of each rect, without writing the rects' area twice when, as for stacked
+/// panels, no two rects share a row.
+pub(crate) fn canvas_with_rounded_rects(
     width: u32,
     height: u32,
     background: Rgba<u8>,
-    x: i32,
-    y: i32,
-    w: u32,
-    h: u32,
+    rects: &[(i32, i32, u32, u32)],
     radius: i32,
     fill: Rgba<u8>,
 ) -> RgbaImage {
-    let rect = RoundedRect::new(x, y, w, h, radius);
+    let rects: Vec<RoundedRect> = rects
+        .iter()
+        .map(|&(x, y, w, h)| RoundedRect::new(x, y, w, h, radius))
+        .collect();
     let mut img = RgbaImage::new(width, height);
     let img_w = width as i32;
     for (py, row) in img
@@ -352,13 +352,20 @@ pub(crate) fn canvas_with_rounded_rect(
         .chunks_exact_mut(width as usize * 4)
         .enumerate()
     {
-        match rect.span(py as i32, img_w) {
-            Some((x0, x1)) => {
+        let mut spans = rects.iter().filter_map(|r| r.span(py as i32, img_w));
+        match (spans.next(), spans.next()) {
+            (None, _) => fill_span(row, background),
+            (Some((x0, x1)), None) => {
                 fill_span(&mut row[..x0 * 4], background);
                 fill_span(&mut row[x0 * 4..x1 * 4], fill);
                 fill_span(&mut row[x1 * 4..], background);
             }
-            None => fill_span(row, background),
+            (Some(first), Some(second)) => {
+                fill_span(row, background);
+                for (x0, x1) in [first, second].into_iter().chain(spans) {
+                    fill_span(&mut row[x0 * 4..x1 * 4], fill);
+                }
+            }
         }
     }
     img
@@ -622,6 +629,79 @@ pub fn create_aa_circle_sprite(radius: i32, color: Rgba<u8>) -> Sprite {
     Sprite::from_rgba(side, &buffer)
 }
 
+/// Builds an **anti-aliased**, downward-pointing triangle sprite, the insulin
+/// marker: `2 * size` wide and tall around its center, the same shape as
+/// [`draw_smart_triangle`]. A positive `grow` pads it by that many pixels all
+/// round (rounded at the corners), for an outline stamped beneath it.
+///
+/// Pixels on the edge are 4×4 supersampled for their coverage, stored in the
+/// alpha channel; composite the sprite with [`blend_sprite`].
+pub fn create_aa_triangle_sprite(size: f32, grow: f32, color: Rgba<u8>) -> Sprite {
+    let side = 2 * (size + grow).ceil() as u32 + 3;
+    let c = (side as f32 - 1.0) / 2.0;
+    let corners = [(c - size, c - size), (c + size, c - size), (c, c + size)];
+    let covers = |x: f32, y: f32| signed_distance_to_triangle((x, y), corners) <= grow;
+    // Half a pixel's diagonal: pixels whose center is further than this from
+    // the edge are wholly inside or outside it.
+    const HALF_DIAGONAL: f32 = 0.71;
+    let mut buffer = vec![0u8; (side * side * 4) as usize];
+
+    for y in 0..side {
+        for x in 0..side {
+            let (fx, fy) = (x as f32, y as f32);
+            let d = signed_distance_to_triangle((fx, fy), corners) - grow;
+            let hits = if d <= -HALF_DIAGONAL {
+                16
+            } else if d > HALF_DIAGONAL {
+                0
+            } else {
+                (0..16)
+                    .filter(|i| {
+                        covers(
+                            fx + ((i % 4) as f32 + 0.5) / 4.0 - 0.5,
+                            fy + ((i / 4) as f32 + 0.5) / 4.0 - 0.5,
+                        )
+                    })
+                    .count()
+            };
+            if hits > 0 {
+                let idx = ((y * side + x) * 4) as usize;
+                buffer[idx..idx + 3].copy_from_slice(&color.0[..3]);
+                buffer[idx + 3] = (color[3] as f32 * hits as f32 / 16.0).round() as u8;
+            }
+        }
+    }
+    Sprite::from_rgba(side, &buffer)
+}
+
+/// Distance from `p` to the edge of the filled triangle `t`: positive
+/// outside it, negative inside.
+fn signed_distance_to_triangle(p: (f32, f32), t: [(f32, f32); 3]) -> f32 {
+    let side_of =
+        |a: (f32, f32), b: (f32, f32)| (b.0 - a.0) * (p.1 - a.1) - (b.1 - a.1) * (p.0 - a.0);
+    let d = [
+        side_of(t[0], t[1]),
+        side_of(t[1], t[2]),
+        side_of(t[2], t[0]),
+    ];
+    let inside = d.iter().all(|&v| v >= 0.0) || d.iter().all(|&v| v <= 0.0);
+    let to_edge = (0..3)
+        .map(|i| {
+            let (a, b) = (t[i], t[(i + 1) % 3]);
+            let (dx, dy) = (b.0 - a.0, b.1 - a.1);
+            let along =
+                (((p.0 - a.0) * dx + (p.1 - a.1) * dy) / (dx * dx + dy * dy)).clamp(0.0, 1.0);
+            let (qx, qy) = (a.0 + along * dx - p.0, a.1 + along * dy - p.1);
+            (qx * qx + qy * qy).sqrt()
+        })
+        .fold(f32::MAX, f32::min);
+    if inside {
+        -to_edge
+    } else {
+        to_edge
+    }
+}
+
 /// Alpha-blends `sprite` centered at (`cx`, `cy`) onto `img`, honoring each
 /// source pixel's alpha. Pairs with [`create_aa_circle_sprite`] for smooth,
 /// soft-edged markers.
@@ -663,5 +743,50 @@ pub fn blend_sprite(img: &mut RgbaImage, sprite: &Sprite, cx: i32, cy: i32) {
             dst[2] = (p.rgb[2] + dst[2] as f32 * p.inv) as u8;
             // dst alpha left as-is (canvas stays opaque)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn alpha_at(sprite: &Sprite, x: i32, y: i32) -> u8 {
+        let mut img = RgbaImage::from_pixel(sprite.side, sprite.side, Rgba([0, 0, 0, 255]));
+        let c = sprite.side as i32 / 2;
+        blend_sprite(&mut img, sprite, c, c);
+        img.get_pixel(x as u32, y as u32)[0]
+    }
+
+    #[test]
+    fn triangle_sprites_build_for_any_size() {
+        // `Sprite::from_rgba` asserts (in debug) one color and one opaque run
+        // per row, which the supersampled edges must respect.
+        for half_px in 2..40 {
+            for grow in [0.0, 1.0, 1.5, 2.7] {
+                create_aa_triangle_sprite(half_px as f32 / 2.0, grow, Rgba([255, 0, 0, 255]));
+            }
+        }
+    }
+
+    #[test]
+    fn triangle_points_down_and_fills_its_middle() {
+        let sprite = create_aa_triangle_sprite(8.0, 0.0, Rgba([255, 255, 255, 255]));
+        let c = sprite.side as i32 / 2;
+        assert_eq!(alpha_at(&sprite, c, c), 255);
+        // Wide at the top, a point at the bottom.
+        assert_eq!(alpha_at(&sprite, c - 5, c - 7), 255);
+        assert_eq!(alpha_at(&sprite, c - 7, c + 7), 0);
+        assert!(alpha_at(&sprite, c, c + 7) > 0);
+    }
+
+    #[test]
+    fn grown_triangle_surrounds_the_plain_one() {
+        let plain = create_aa_triangle_sprite(6.0, 0.0, Rgba([255, 255, 255, 255]));
+        let grown = create_aa_triangle_sprite(6.0, 2.0, Rgba([255, 255, 255, 255]));
+        assert!(grown.side > plain.side);
+        let (cp, cg) = (plain.side as i32 / 2, grown.side as i32 / 2);
+        // Just above the plain triangle's top edge only the grown one covers.
+        assert_eq!(alpha_at(&plain, cp, cp - 7), 0);
+        assert_eq!(alpha_at(&grown, cg, cg - 7), 255);
     }
 }
