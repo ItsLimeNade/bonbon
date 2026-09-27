@@ -24,6 +24,7 @@ Bonbon is a fast, customizable graph rendering library designed for diabetes rel
 - **Microbolus Filtering**: Configurable threshold to simplify SMB visualization
 - **Mini Graphs**: Optional insulin and carbs on board graphs under the glucose graph, from your treatments faded over a duration you set, or from your AID system's reported values
 - **BG Card**: Compact status card showing current glucose, trend, delta, IOB/COB, and a 3 hour sparkline
+- **Percentile Graph**: A typical day summarized from any number of days: the median with 25–75% and 5–95% bands (an Ambulatory Glucose Profile), colored by glucose status
 - **Time in Range Card**: TIR summary with a stacked band bar, per-band durations and counts, plus average, SD, CV and GMI statistics
 
 ---
@@ -89,6 +90,32 @@ The Time in Range Card is a 640×400 summary (scalable via `with_scale`) of how 
 <p align="center">
   <img src="assets/images/example_time_in_range.png" alt="Time in Range Card" width="640">
 </p>
+
+---
+
+## Percentile Graph
+
+The Percentile Graph shows how glucose typically runs through the day, from readings over any period (14 days is the usual choice). At each time of day it draws the median as a line, the 25th–75th percentile band around it and the lighter 5th–95th band around that, colored by glucose status, over the same framed panel, target lines and axes as the Glucose Graph. Each time slot uses every reading within 30 minutes of it, and the curves are lightly smoothed, as in AGP reports.
+
+<p align="center">
+  <img src="assets/images/example_percentile.png" alt="Percentile Graph" width="800">
+</p>
+
+```rust
+let graph = PercentileGraphBuilder::new()
+    .with_entries(last_14_days)
+    .with_targets(70.0, 180.0)
+    .with_timezone(chrono_tz::Europe::Paris)
+    .build()?;
+```
+
+The bands are configurable, e.g. a single 15th–75th band with the median:
+
+```rust
+.with_bands(PercentileBands { inner: (15.0, 75.0), outer: None, median: true })
+```
+
+`PercentileProfile::compute` returns the numbers without rendering an image.
 
 ---
 

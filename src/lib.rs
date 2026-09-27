@@ -10,6 +10,7 @@
 //! * **Dynamic Scaling**: Automatically adjusts Y-axis bounds based on data range.
 //! * **Flexible Unit Support**: Native support for mg/dL and mmol/L, including dual-unit display modes.
 //! * **Treatment Visualization**: Render insulin boluses, carbohydrate intake, and manual fingerstick calibrations.
+//! * **Percentile Graph**: A typical day from any number of days, with median and percentile bands.
 //! * **Mini Graphs**: Optional insulin and carbs on board graphs under the glucose graph, from treatments or reported values.
 //! * **Theming**: Fully customizable color palettes.
 //!
@@ -17,7 +18,7 @@
 //!
 //! The crate is organized into several modules:
 //! * [`models`]: Data structures for glucose readings, treatments, and axis configurations.
-//! * [`charts`]: The primary plotting logic, including [`charts::glucose::GlucoseGraphBuilder`] and [`charts::bg_card::BgCardBuilder`].
+//! * [`charts`]: The primary plotting logic, including [`charts::glucose::GlucoseGraphBuilder`], [`charts::percentile::PercentileGraphBuilder`] and [`charts::bg_card::BgCardBuilder`].
 //! * [`theme`]: Styling and color management.
 //! * [`prelude`]: A convenient module to import common traits and structures.
 
@@ -31,6 +32,7 @@ mod utils {
 pub mod charts {
     pub mod bg_card;
     pub mod glucose;
+    pub mod percentile;
     #[cfg(feature = "beetroot")]
     pub mod stickers;
     pub mod time_in_range;
@@ -42,6 +44,9 @@ pub mod prelude {
         SparklinePoint,
     };
     pub use crate::charts::glucose::{GlucoseGraphBuilder, LayoutConfig, MiniGraph, OnBoard};
+    pub use crate::charts::percentile::{
+        PercentileBands, PercentileGraphBuilder, PercentileProfile,
+    };
     #[cfg(feature = "beetroot")]
     pub use crate::charts::stickers::{Sticker, StickerCategory, StickerSet, StickerSource};
     pub use crate::charts::time_in_range::{TimeInRangeBuilder, TirBand, TirStats, TirThresholds};
