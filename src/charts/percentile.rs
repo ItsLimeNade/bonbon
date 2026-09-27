@@ -7,15 +7,16 @@ use chrono_tz::Tz;
 use image::{Rgba, RgbaImage};
 
 use crate::charts::glucose::LayoutConfig;
-use crate::models::{GraphEntry, GraphScaling, UnitDisplay, UnitPreference};
+use crate::models::{GraphEntry, GraphScaling, UnitDisplay};
 use crate::theme::Theme;
+use crate::utils::axis::{
+    fmt_glucose, other_unit, round_step, round_ticks, unit_name, unit_preference,
+};
 use crate::utils::drawing::{
     blend_fast_rect, blend_pixel, blend_sprite, canvas_with_rounded_rects, create_aa_circle_sprite,
     draw_dashed_horizontal_line, draw_filled_rounded_rect, Sprite,
 };
-use crate::utils::text::{draw_text, text_w};
-
-const MGDL_PER_MMOL: f32 = 18.0182;
+use crate::utils::text::{draw_text, draw_text_right, text_w};
 
 /// Gap (before scaling) between the plot area and the rounded panel that
 /// frames it, as on the glucose graph.
@@ -186,7 +187,7 @@ fn percentile(sorted: &[f32], p: f32) -> f32 {
 
 /// A curve's value at a (fractional) minute of the day, interpolated between
 /// its slots and wrapping around midnight.
-fn curve_at(curve: &[Option<f32>], minute: f32) -> Option<f32> {
+pub(crate) fn curve_at(curve: &[Option<f32>], minute: f32) -> Option<f32> {
     let f = minute / SLOT_MINUTES as f32;
     let i = f.floor().max(0.0) as usize;
     let a = curve[i % SLOTS]?;
@@ -434,26 +435,18 @@ impl<'a> PercentileGraphBuilder<'a> {
     /// step of the display unit that leaves room for each label and no more
     /// than 8 lines.
     fn tick_step(&self, plot: &Plot) -> f32 {
-        let pref = unit_preference(self.unit_display);
-        let (steps, per): (&[f32], f32) = match pref {
-            UnitPreference::MgDl => (&[10.0, 20.0, 25.0, 50.0, 100.0, 200.0], 1.0),
-            UnitPreference::MmolL => (&[0.5, 1.0, 2.0, 5.0, 10.0], MGDL_PER_MMOL),
-        };
         let label_h = 31.0 * plot.s
             + if matches!(self.unit_display, UnitDisplay::Dual { .. }) {
                 21.0 * plot.s
             } else {
                 0.0
             };
-        let range = plot.y_max - plot.y_min;
-        steps
-            .iter()
-            .map(|st| st * per)
-            .find(|&step| {
-                let lines = range / step;
-                lines <= 8.0 && plot.h() / lines >= label_h * 1.5
-            })
-            .unwrap_or(steps[steps.len() - 1] * per)
+        round_step(
+            plot.y_max - plot.y_min,
+            plot.h(),
+            label_h,
+            unit_preference(self.unit_display),
+        )
     }
 
     /// The opaque color of the plot panel: `grid_major` tinted over the
@@ -676,16 +669,12 @@ impl<'a> PercentileGraphBuilder<'a> {
         let pref = unit_preference(self.unit_display);
         let dual = matches!(self.unit_display, UnitDisplay::Dual { .. });
 
-        let unit_name = |p: UnitPreference| match p {
-            UnitPreference::MgDl => "mg/dL",
-            UnitPreference::MmolL => "mmol/L",
-        };
         let caption_bottom = plot.top - PANEL_PAD * s - 6.0 * s;
         let mut y = caption_bottom;
         if dual {
             let other = other_unit(pref);
             y -= size_xs;
-            draw_right(
+            draw_text_right(
                 img,
                 self.theme.text_dim,
                 font,
@@ -696,7 +685,7 @@ impl<'a> PercentileGraphBuilder<'a> {
             );
             y -= 2.0 * s;
         }
-        draw_right(
+        draw_text_right(
             img,
             self.theme.text_secondary,
             font,
@@ -708,7 +697,7 @@ impl<'a> PercentileGraphBuilder<'a> {
 
         for &v in ticks {
             let y = plot.y(v);
-            draw_right(
+            draw_text_right(
                 img,
                 self.theme.text_primary,
                 font,
@@ -718,7 +707,7 @@ impl<'a> PercentileGraphBuilder<'a> {
                 &fmt_glucose(v, pref),
             );
             if dual {
-                draw_right(
+                draw_text_right(
                     img,
                     self.theme.text_dim,
                     font,
@@ -866,9 +855,7 @@ impl<'a> PercentileGraphBuilder<'a> {
 
 /// The multiples of `step` (mg/dL) inside the plot's range.
 fn value_ticks(plot: &Plot, step: f32) -> Vec<f32> {
-    let first = (plot.y_min / step - 1e-3).ceil() as i32;
-    let last = (plot.y_max / step + 1e-3).floor() as i32;
-    (first..=last).map(|k| k as f32 * step).collect()
+    round_ticks(plot.y_min, plot.y_max, step)
 }
 
 /// A legend entry's sample.
@@ -914,51 +901,6 @@ impl Plot {
     }
 }
 
-/// Draws `text` with its right edge at `right` and its top at `top`.
-#[allow(clippy::too_many_arguments)]
-fn draw_right(
-    img: &mut RgbaImage,
-    color: Rgba<u8>,
-    font: &FontRef,
-    size: f32,
-    right: f32,
-    top: f32,
-    text: &str,
-) {
-    let x = right - text_w(font, text, size);
-    draw_text(
-        img,
-        color,
-        x as i32,
-        top as i32,
-        PxScale::from(size),
-        font,
-        text,
-    );
-}
-
-fn unit_preference(unit: UnitDisplay) -> UnitPreference {
-    match unit {
-        UnitDisplay::MgDl => UnitPreference::MgDl,
-        UnitDisplay::MmolL => UnitPreference::MmolL,
-        UnitDisplay::Dual { primary } => primary,
-    }
-}
-
-fn other_unit(unit: UnitPreference) -> UnitPreference {
-    match unit {
-        UnitPreference::MgDl => UnitPreference::MmolL,
-        UnitPreference::MmolL => UnitPreference::MgDl,
-    }
-}
-
-fn fmt_glucose(mgdl: f32, unit: UnitPreference) -> String {
-    match unit {
-        UnitPreference::MgDl => format!("{:.0}", mgdl),
-        UnitPreference::MmolL => format!("{:.1}", mgdl / MGDL_PER_MMOL),
-    }
-}
-
 /// "25–75%", keeping a decimal only when a bound has one.
 fn fmt_range((lo, hi): (f32, f32)) -> String {
     let p = |v: f32| {
@@ -999,6 +941,8 @@ fn default_period_label(profile: &PercentileProfile, timezone: Tz) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::models::UnitPreference;
+    use crate::utils::axis::MGDL_PER_MMOL;
     use chrono::{Duration, TimeZone};
 
     fn at(day: i64, minute: i64) -> DateTime<Utc> {

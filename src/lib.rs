@@ -10,6 +10,7 @@
 //! * **Dynamic Scaling**: Automatically adjusts Y-axis bounds based on data range.
 //! * **Flexible Unit Support**: Native support for mg/dL and mmol/L, including dual-unit display modes.
 //! * **Treatment Visualization**: Render insulin boluses, carbohydrate intake, and manual fingerstick calibrations.
+//! * **Compare Graph**: Two periods side by side with their typical days and statistics.
 //! * **Percentile Graph**: A typical day from any number of days, with median and percentile bands.
 //! * **Mini Graphs**: Optional insulin and carbs on board graphs under the glucose graph, from treatments or reported values.
 //! * **Theming**: Fully customizable color palettes.
@@ -18,19 +19,21 @@
 //!
 //! The crate is organized into several modules:
 //! * [`models`]: Data structures for glucose readings, treatments, and axis configurations.
-//! * [`charts`]: The primary plotting logic, including [`charts::glucose::GlucoseGraphBuilder`], [`charts::percentile::PercentileGraphBuilder`] and [`charts::bg_card::BgCardBuilder`].
+//! * [`charts`]: The primary plotting logic, including [`charts::glucose::GlucoseGraphBuilder`], [`charts::percentile::PercentileGraphBuilder`], [`charts::compare::CompareGraphBuilder`] and [`charts::bg_card::BgCardBuilder`].
 //! * [`theme`]: Styling and color management.
 //! * [`prelude`]: A convenient module to import common traits and structures.
 
 pub mod models;
 pub mod theme;
 mod utils {
+    pub mod axis;
     pub mod color;
     pub mod drawing;
     pub mod text;
 }
 pub mod charts {
     pub mod bg_card;
+    pub mod compare;
     pub mod glucose;
     pub mod percentile;
     #[cfg(feature = "beetroot")]
@@ -43,6 +46,7 @@ pub mod prelude {
         builtin_icons, BgCardBuilder, BgCardData, GlucoseStatus, InfoPill, PillIcon, PillState,
         SparklinePoint,
     };
+    pub use crate::charts::compare::{CompareGraphBuilder, NightTargets};
     pub use crate::charts::glucose::{GlucoseGraphBuilder, LayoutConfig, MiniGraph, OnBoard};
     pub use crate::charts::percentile::{
         PercentileBands, PercentileGraphBuilder, PercentileProfile,

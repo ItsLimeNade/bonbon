@@ -25,6 +25,7 @@ Bonbon is a fast, customizable graph rendering library designed for diabetes rel
 - **Mini Graphs**: Optional insulin and carbs on board graphs under the glucose graph, from your treatments faded over a duration you set, or from your AID system's reported values
 - **BG Card**: Compact status card showing current glucose, trend, delta, IOB/COB, and a 3 hour sparkline
 - **Percentile Graph**: A typical day summarized from any number of days: the median with 25–75% and 5–95% bands (an Ambulatory Glucose Profile), colored by glucose status
+- **Compare Graph**: Two periods side by side, each with its typical day and average, GMI, SD and CV, plus the change between them
 - **Time in Range Card**: TIR summary with a stacked band bar, per-band durations and counts, plus average, SD, CV and GMI statistics
 
 ---
@@ -116,6 +117,30 @@ The bands are configurable, e.g. a single 15th–75th band with the median:
 ```
 
 `PercentileProfile::compute` returns the numbers without rendering an image.
+
+---
+
+## Compare Graph
+
+The Compare Graph puts two periods side by side, typically the last 14 days and the 14 before them. Each card shows a typical day, with a bar every 15 minutes spanning the middle half of the readings (25th to 75th percentile) under a dotted median, colored by glucose status, and the period's average glucose, GMI, standard deviation and coefficient of variation. Both cards share one scale, and the second shows how each number changed. Different targets can apply overnight: the target lines step at the night's edges and the night is shaded.
+
+<p align="center">
+  <img src="assets/images/example_compare.png" alt="Compare Graph" width="800">
+</p>
+
+```rust
+let graph = CompareGraphBuilder::new()
+    .with_periods(previous_14_days, last_14_days)
+    .with_targets(80.0, 180.0)
+    .with_night_targets(NightTargets {
+        low: 90.0,
+        high: 180.0,
+        from: NaiveTime::from_hms_opt(23, 0, 0).unwrap(),
+        until: NaiveTime::from_hms_opt(7, 0, 0).unwrap(),
+    })
+    .with_timezone(chrono_tz::Europe::Paris)
+    .build()?;
+```
 
 ---
 
