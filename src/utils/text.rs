@@ -138,6 +138,29 @@ pub(crate) fn draw_text_with_outline(
     blend_glyphs(img, &glyphs, x, y, text_color);
 }
 
+/// Draws `text` with its right edge at `right` and its top at `top`.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn draw_text_right(
+    img: &mut RgbaImage,
+    color: Rgba<u8>,
+    font: &FontRef,
+    size: f32,
+    right: f32,
+    top: f32,
+    text: &str,
+) {
+    let x = right - text_w(font, text, size);
+    draw_text(
+        img,
+        color,
+        x as i32,
+        top as i32,
+        PxScale::from(size),
+        font,
+        text,
+    );
+}
+
 /// Real rendered width in pixels of `text` at `size`, using the same glyph
 /// advances `draw_text_mut` uses, so a box sized with this exactly fits the text.
 ///
