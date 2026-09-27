@@ -2,26 +2,33 @@ use std::format;
 use std::string::ToString;
 
 use crate::models::{
-    GraphEntry, GraphScaling, GraphTreatment, TimeAxisMode, TreatmentDisplayMode, UnitDisplay,
-    UnitPreference,
+    GraphEntry, GraphScaling, GraphTreatment, SeriesPoint, TimeAxisMode, TreatmentDisplayMode,
+    UnitDisplay, UnitPreference,
 };
 use crate::theme::Theme;
 use crate::utils::color::darken_color;
 use crate::utils::drawing::{
-    blend_fast_rect, blend_sprite, create_aa_circle_sprite, draw_dashed_horizontal_line,
-    draw_filled_rounded_rect, draw_smart_circle, draw_smart_triangle, draw_text_with_outline,
+    blend_fast_rect, blend_pixel, blend_sprite, canvas_with_rounded_rects, create_aa_circle_sprite,
+    create_aa_triangle_sprite, draw_dashed_horizontal_line, draw_smart_circle, draw_smart_triangle,
+    Sprite,
 };
+use crate::utils::text::{draw_text as draw_text_mut, draw_text_with_outline};
 
 use ab_glyph::{FontRef, PxScale};
 use chrono::{Duration, Utc};
 use chrono_tz::Tz;
 use image::{Rgba, RgbaImage};
-use imageproc::drawing::{draw_filled_circle_mut, draw_line_segment_mut, draw_text_mut};
-use rayon::prelude::*;
+use imageproc::drawing::{draw_filled_circle_mut, draw_line_segment_mut};
 
 /// Gap (before scaling) between the plot area and the rounded panel that frames
 /// it. Shared by the panel and the axis labels so the exterior lines up.
 const PANEL_PAD: f32 = 16.0;
+
+/// Share of the plot height each mini graph takes from the glucose plot.
+const LANE_SHARE: f32 = 0.1;
+
+/// Gap (before scaling) between two stacked panels.
+const PANEL_GAP: f32 = 12.0;
 
 /// Configuration for the visual layout of the graph.
 #[derive(Clone, Debug)]
@@ -59,6 +66,141 @@ struct GraphViewport {
     plot_bottom: f32,
     plot_w: f32,
     plot_h: f32,
+    /// Plot areas of the mini graphs under the glucose plot, top to bottom.
+    /// They share the plot's horizontal extent.
+    lanes: Vec<Lane>,
+    /// Bottom of the lowest plot area, where the time axis hangs.
+    axis_bottom: f32,
+}
+
+/// Where a mini graph's plot area sits.
+struct Lane {
+    /// Index of its [`MiniGraph`] in the builder.
+    graph: usize,
+    top: f32,
+    bottom: f32,
+}
+
+/// A small graph under the glucose plot, sharing its time axis.
+///
+/// The glucose plot is always drawn; mini graphs are optional and stack
+/// under it in the order they are added, each in its own panel, with the
+/// glucose plot giving up the height they need. See
+/// [`GlucoseGraphBuilder::add_mini_graph`].
+#[derive(Debug, Clone)]
+#[non_exhaustive]
+pub enum MiniGraph {
+    /// Insulin on board, in units, with a triangle on the curve for each
+    /// insulin treatment.
+    Iob(OnBoard),
+    /// Carbs on board, in grams, with a dot on the curve for each carb
+    /// treatment.
+    Cob(OnBoard),
+}
+
+/// Where a [`MiniGraph`] gets its values.
+#[derive(Debug, Clone)]
+pub enum OnBoard {
+    /// From the graph's own treatments: each one counts in full when given
+    /// and fades in a straight line to nothing over this duration, and the
+    /// graph shows the total of those still on board.
+    FromTreatments(Duration),
+    /// Values reported by an AID system, e.g. from Nightscout device
+    /// statuses.
+    Reported(Vec<SeriesPoint>),
+}
+
+impl MiniGraph {
+    /// Insulin on board from the graph's insulin treatments, each fading
+    /// linearly to nothing over `duration` (your duration of insulin action).
+    pub fn iob(duration: Duration) -> Self {
+        Self::Iob(OnBoard::FromTreatments(duration))
+    }
+
+    /// Carbs on board from the graph's carb treatments, each fading linearly
+    /// to nothing over `duration` (how long your carbs take to absorb).
+    pub fn cob(duration: Duration) -> Self {
+        Self::Cob(OnBoard::FromTreatments(duration))
+    }
+
+    /// Insulin on board as reported by an AID system, in units.
+    pub fn iob_reported<I>(points: I) -> Self
+    where
+        I: IntoIterator,
+        I::Item: Into<SeriesPoint>,
+    {
+        Self::Iob(OnBoard::Reported(
+            points.into_iter().map(|p| p.into()).collect(),
+        ))
+    }
+
+    /// Carbs on board as reported by an AID system, in grams.
+    pub fn cob_reported<I>(points: I) -> Self
+    where
+        I: IntoIterator,
+        I::Item: Into<SeriesPoint>,
+    {
+        Self::Cob(OnBoard::Reported(
+            points.into_iter().map(|p| p.into()).collect(),
+        ))
+    }
+
+    fn reported_mut(&mut self) -> Option<&mut Vec<SeriesPoint>> {
+        match self {
+            Self::Iob(OnBoard::Reported(points)) | Self::Cob(OnBoard::Reported(points)) => {
+                Some(points)
+            }
+            _ => None,
+        }
+    }
+
+    /// Everything that sets this kind of mini graph apart, bar its values.
+    fn style(&self, theme: &Theme) -> MiniGraphStyle {
+        match self {
+            Self::Iob(_) => MiniGraphStyle {
+                name: "IOB",
+                color: theme.insulin,
+                floor: 1.0,
+                format: |v| format!("{:.1}u", v),
+                amount: |t| t.insulin,
+                marker: Marker::Triangle,
+                microboluses: true,
+            },
+            Self::Cob(_) => MiniGraphStyle {
+                name: "COB",
+                color: theme.carbs,
+                floor: 10.0,
+                format: |v| format!("{:.0}g", v),
+                amount: |t| t.carbs,
+                marker: Marker::Dot,
+                microboluses: false,
+            },
+        }
+    }
+}
+
+/// How a kind of [`MiniGraph`] is drawn.
+struct MiniGraphStyle {
+    /// Shown in the left margin, in `color`.
+    name: &'static str,
+    color: Rgba<u8>,
+    /// Lowest top of scale, so a few small doses or snacks don't fill the
+    /// graph.
+    floor: f32,
+    /// Formats a value with its unit.
+    format: fn(f32) -> String,
+    /// The amount of a treatment this graph marks, if any.
+    amount: fn(&GraphTreatment) -> Option<f32>,
+    marker: Marker,
+    /// Whether amounts up to the microbolus threshold get the smallest,
+    /// unringed marker.
+    microboluses: bool,
+}
+
+#[derive(Clone, Copy)]
+enum Marker {
+    Triangle,
+    Dot,
 }
 
 struct RenderContext<'a> {
@@ -105,6 +247,7 @@ pub struct GlucoseGraphBuilder<'a> {
     font: &'a [u8],
     microbolus_threshold: f32,
     show_trace: bool,
+    mini_graphs: Vec<MiniGraph>,
     #[cfg(feature = "beetroot")]
     sticker_set: Option<crate::charts::stickers::StickerSet>,
 }
@@ -136,6 +279,7 @@ impl<'a> GlucoseGraphBuilder<'a> {
             font: DEFAULT_FONT,
             microbolus_threshold: 0.0,
             show_trace: true,
+            mini_graphs: Vec::new(),
             #[cfg(feature = "beetroot")]
             sticker_set: None,
         }
@@ -306,19 +450,46 @@ impl<'a> GlucoseGraphBuilder<'a> {
         self
     }
 
+    /// Sets the mini graphs drawn under the glucose plot, replacing any
+    /// earlier ones. They stack top to bottom in the given order, each in its
+    /// own panel sharing the plot's time axis. With none (the default) only
+    /// the glucose plot is drawn.
+    pub fn with_mini_graphs<I>(mut self, graphs: I) -> Self
+    where
+        I: IntoIterator<Item = MiniGraph>,
+    {
+        self.mini_graphs = graphs.into_iter().collect();
+        self
+    }
+
+    /// Adds a mini graph under the glucose plot, below any added before.
+    pub fn add_mini_graph(mut self, graph: MiniGraph) -> Self {
+        self.mini_graphs.push(graph);
+        self
+    }
+
     /// Builds the final image, returning an ImageBuffer.
     pub fn build(mut self) -> Result<RgbaImage, Box<dyn std::error::Error>> {
         let font = FontRef::try_from_slice(self.font)?;
-        let mut img =
-            RgbaImage::from_pixel(self.layout.width, self.layout.height, self.theme.background);
 
         // Calculate the graph's viewport first, this allows for a scalable margin system
         // and correct entry positionning later on.
         let viewport = self.calculate_viewport();
 
+        // Flat background, framed plot panel included (the same soft panel the
+        // bg/TIR cards use).
+        let mut img = self.new_canvas(&viewport);
+
         // Here we're sorting the entries with worst-case scenario of O(n * log(n)) for the time complexity.
         // Sorting them will allow us to correctly fetch the graph's time span.
-        self.entries.par_sort_unstable_by_key(|e| e.date);
+        self.entries.sort_unstable_by_key(|e| e.date);
+        for points in self
+            .mini_graphs
+            .iter_mut()
+            .filter_map(MiniGraph::reported_mut)
+        {
+            points.sort_unstable_by_key(|p| p.date);
+        }
         let (start_time, end_time) = self.determine_time_range()?;
         let time_span_secs = (end_time - start_time).num_seconds().max(1) as f32;
 
@@ -343,10 +514,6 @@ impl<'a> GlucoseGraphBuilder<'a> {
             font: &font,
         };
 
-        // Frame the plot with the same soft panel the bg/TIR cards use, over a
-        // clean flat background.
-        self.draw_plot_panel(&mut img, &ctx);
-
         // Faint gridlines, soft target dashes, then the axis annotations.
         self.draw_value_gridlines(&mut img, &ctx);
         self.draw_target_lines(&mut img, &ctx);
@@ -356,6 +523,11 @@ impl<'a> GlucoseGraphBuilder<'a> {
 
         // Same optimization than for entries.
         let visible_treatments = self.get_visible_treatments(start_time, end_time);
+
+        for lane in &ctx.viewport.lanes {
+            self.draw_lane(&mut img, &ctx, lane, &visible_treatments);
+        }
+
         self.draw_treatments(&mut img, &ctx, &visible_treatments);
 
         // Stickers go behind entries so the readings stay clear on top.
@@ -426,7 +598,38 @@ impl<'a> GlucoseGraphBuilder<'a> {
         let m_right = self.layout.margin_right.unwrap_or(32.0 * s);
 
         let plot_w = self.layout.width as f32 - m_left - m_right;
-        let plot_h = self.layout.height as f32 - m_top - m_bottom;
+        let full_h = self.layout.height as f32 - m_top - m_bottom;
+
+        // Each mini graph gets its own panel under the glucose plot, which
+        // gives up the height they need. With many of them the lanes shrink
+        // so their panels take at most half the height, for as long as the
+        // panels' padding alone fits in it.
+        let pad = PANEL_PAD * s;
+        let gap = PANEL_GAP * s;
+        let count = self.mini_graphs.len() as f32;
+        let lane_h = if count == 0.0 {
+            0.0
+        } else {
+            let most = (full_h * 0.5) / count - 2.0 * pad - gap;
+            (full_h * LANE_SHARE).max(36.0 * s).min(most).max(0.0)
+        };
+        let plot_h = full_h - count * (lane_h + 2.0 * pad + gap);
+
+        // Panel edges: the glucose panel's bottom, then a gap and a padded
+        // lane per mini graph.
+        let mut edge = m_top + plot_h + pad;
+        let lanes: Vec<Lane> = (0..self.mini_graphs.len())
+            .map(|graph| {
+                let top = edge + gap + pad;
+                edge = top + lane_h + pad;
+                Lane {
+                    graph,
+                    top,
+                    bottom: top + lane_h,
+                }
+            })
+            .collect();
+        let axis_bottom = lanes.last().map_or(m_top + plot_h, |l| l.bottom);
 
         GraphViewport {
             s,
@@ -436,6 +639,8 @@ impl<'a> GlucoseGraphBuilder<'a> {
             plot_bottom: m_top + plot_h,
             plot_w,
             plot_h,
+            lanes,
+            axis_bottom,
         }
     }
 
@@ -519,11 +724,7 @@ impl<'a> GlucoseGraphBuilder<'a> {
                 if visible_entries.is_empty() {
                     (clamp_min, clamp_max)
                 } else {
-                    let (min_sgv, max_sgv) =
-                        visible_entries.par_iter().map(|e| (e.sgv, e.sgv)).reduce(
-                            || (f32::MAX, f32::MIN),
-                            |(min_a, max_a), (min_b, max_b)| (min_a.min(min_b), max_a.max(max_b)),
-                        );
+                    let (min_sgv, max_sgv) = min_max(visible_entries.iter().map(|e| e.sgv));
 
                     let calc_max = max_sgv;
                     let calc_min = ((min_sgv - 20.0) / 10.0).floor() * 10.0;
@@ -537,22 +738,40 @@ impl<'a> GlucoseGraphBuilder<'a> {
         }
     }
 
-    /// Draws the rounded panel that frames the plot area. This replaces the old
-    /// protruding L-shaped axis spines (the main "unstyled plot" tell) with the
-    /// same soft raised-card surface the other charts use.
-    fn draw_plot_panel(&self, img: &mut RgbaImage, ctx: &RenderContext) {
-        let s = ctx.viewport.s;
+    /// Creates the canvas: flat background plus the rounded panel that frames
+    /// the plot area. The panel replaces the old protruding L-shaped axis
+    /// spines (the main "unstyled plot" tell) with the same soft raised-card
+    /// surface the other charts use.
+    ///
+    /// The panel is a translucent tint over a flat background, so it is one
+    /// known color: the canvas is written in a single pass with it rather than
+    /// filled and then blended pixel by pixel over most of its area.
+    fn new_canvas(&self, viewport: &GraphViewport) -> RgbaImage {
+        let s = viewport.s;
         let pad = PANEL_PAD * s;
-        let [gr, gg, gb, _] = self.theme.grid_major.0;
-        draw_filled_rounded_rect(
-            img,
-            (ctx.viewport.plot_left - pad) as i32,
-            (ctx.viewport.plot_top - pad) as i32,
-            (ctx.viewport.plot_w + 2.0 * pad) as u32,
-            (ctx.viewport.plot_h + 2.0 * pad) as u32,
+        let x = (viewport.plot_left - pad) as i32;
+        let w = (viewport.plot_w + 2.0 * pad) as u32;
+        // The glucose plot's panel, then a matching one per mini graph.
+        let panels: Vec<(i32, i32, u32, u32)> =
+            std::iter::once((viewport.plot_top, viewport.plot_bottom))
+                .chain(viewport.lanes.iter().map(|l| (l.top, l.bottom)))
+                .map(|(top, bottom)| (x, (top - pad) as i32, w, (bottom - top + 2.0 * pad) as u32))
+                .collect();
+        canvas_with_rounded_rects(
+            self.layout.width,
+            self.layout.height,
+            self.theme.background,
+            &panels,
             (18.0 * s) as i32,
-            Rgba([gr, gg, gb, 110]),
-        );
+            self.panel_color(),
+        )
+    }
+
+    /// The opaque color of the plot panels: `grid_major` tinted over the
+    /// background.
+    fn panel_color(&self) -> Rgba<u8> {
+        let [gr, gg, gb, _] = self.theme.grid_major.0;
+        blend_pixel(self.theme.background, Rgba([gr, gg, gb, 110]))
     }
 
     /// Draws faint horizontal gridlines at each Y-axis value tick. Step count
@@ -655,23 +874,31 @@ impl<'a> GlucoseGraphBuilder<'a> {
             pointer += Duration::days(1);
         }
 
+        // The glucose plot and every mini graph under it.
+        let spans: Vec<(f32, f32)> =
+            std::iter::once((ctx.viewport.plot_top, ctx.viewport.plot_bottom))
+                .chain(ctx.viewport.lanes.iter().map(|l| (l.top, l.bottom)))
+                .collect();
+
         while pointer <= local_end {
             let x = ctx.project_x(pointer.with_timezone(&Utc));
             if x >= ctx.viewport.plot_left && x <= ctx.viewport.plot_right {
-                // Vertical dashed separator across the plot height.
-                let mut y = ctx.viewport.plot_top as i32;
-                let bottom = ctx.viewport.plot_bottom as i32;
-                while y < bottom {
-                    let seg = dash.min(bottom - y);
-                    blend_fast_rect(
-                        img,
-                        (x - thickness as f32 / 2.0) as i32,
-                        y,
-                        thickness,
-                        seg as u32,
-                        line_color,
-                    );
-                    y += dash + gap;
+                // Vertical dashed separator across each plot's height.
+                for &(top, bottom) in &spans {
+                    let mut y = top as i32;
+                    let bottom = bottom as i32;
+                    while y < bottom {
+                        let seg = dash.min(bottom - y);
+                        blend_fast_rect(
+                            img,
+                            (x - thickness as f32 / 2.0) as i32,
+                            y,
+                            thickness,
+                            seg as u32,
+                            line_color,
+                        );
+                        y += dash + gap;
+                    }
                 }
 
                 let date_str = pointer.format("%d/%m").to_string();
@@ -729,7 +956,7 @@ impl<'a> GlucoseGraphBuilder<'a> {
             blend_fast_rect(
                 img,
                 x.round() as i32,
-                ctx.viewport.plot_bottom as i32,
+                ctx.viewport.axis_bottom as i32,
                 (1.0 * ctx.viewport.s).ceil() as u32,
                 tick_h as u32,
                 tick_color,
@@ -744,7 +971,7 @@ impl<'a> GlucoseGraphBuilder<'a> {
             let max_tx = (ctx.viewport.plot_right - dim_time.0) as i32;
             tx = tx.clamp(min_tx, max_tx);
 
-            let ty = (ctx.viewport.plot_bottom + 28.0 * ctx.viewport.s) as i32;
+            let ty = (ctx.viewport.axis_bottom + 28.0 * ctx.viewport.s) as i32;
 
             draw_text_mut(
                 img,
@@ -767,7 +994,7 @@ impl<'a> GlucoseGraphBuilder<'a> {
             let mut rx = (x - dim_rel.0 / 2.0) as i32;
             let max_rx = (ctx.viewport.plot_right - dim_rel.0) as i32;
             rx = rx.clamp(min_tx, max_rx);
-            let ry = (ctx.viewport.plot_bottom
+            let ry = (ctx.viewport.axis_bottom
                 + 28.0 * ctx.viewport.s
                 + dim_time.1
                 + 4.0 * ctx.viewport.s) as i32;
@@ -920,7 +1147,7 @@ impl<'a> GlucoseGraphBuilder<'a> {
     ) -> Vec<&GraphTreatment> {
         let mut visible: Vec<&GraphTreatment> = self
             .treatments
-            .par_iter()
+            .iter()
             .filter(|t| t.date >= start && t.date <= end)
             .collect();
         visible.sort_by_key(|t| t.date);
@@ -950,15 +1177,14 @@ impl<'a> GlucoseGraphBuilder<'a> {
                 let dark_insulin = darken_color(self.theme.insulin, 0.6);
                 let dark_carbs = darken_color(self.theme.carbs, 0.6);
 
-                let all_ins_values: Vec<f32> = treatments
-                    .par_iter()
-                    .filter_map(|t| t.insulin)
-                    .filter(|&v| v > self.microbolus_threshold)
-                    .collect();
-                let all_carb_values: Vec<f32> = treatments.iter().filter_map(|t| t.carbs).collect();
-
-                let (ins_min_val, ins_max_val) = min_max(&all_ins_values);
-                let (carb_min_val, carb_max_val) = min_max(&all_carb_values);
+                let (ins_min_val, ins_max_val) = min_max(
+                    treatments
+                        .iter()
+                        .filter_map(|t| t.insulin)
+                        .filter(|&v| v > self.microbolus_threshold),
+                );
+                let (carb_min_val, carb_max_val) =
+                    min_max(treatments.iter().filter_map(|t| t.carbs));
 
                 let ins_base_max = (22.0 * 2.0 / 3.0) * ctx.viewport.s;
                 let ins_base_min = (6.0 * 5.0 / 3.0) * ctx.viewport.s;
@@ -970,7 +1196,7 @@ impl<'a> GlucoseGraphBuilder<'a> {
                 let mut text_regions: Vec<(i32, i32, i32, i32)> = Vec::new();
                 let margin_overlap = 4.0 * ctx.viewport.s;
 
-                let overlap_targets = vec![
+                let overlap_targets = [
                     self.theme.insulin,
                     dark_insulin,
                     self.theme.carbs,
@@ -979,11 +1205,7 @@ impl<'a> GlucoseGraphBuilder<'a> {
 
                 for t in treatments {
                     let x = ctx.project_x(t.date);
-                    let closest = self
-                        .entries
-                        .par_iter()
-                        .min_by_key(|e| (e.date.timestamp() - t.date.timestamp()).abs());
-                    let base_y = if let Some(entry) = closest {
+                    let base_y = if let Some(entry) = closest_entry(&self.entries, t.date) {
                         ctx.project_y(entry.sgv)
                     } else {
                         ctx.viewport.plot_bottom
@@ -1149,18 +1371,17 @@ impl<'a> GlucoseGraphBuilder<'a> {
                     groups.push(vec![*t]);
                 }
 
-                for group in groups {
-                    let x_sum: f32 = group.par_iter().map(|t| ctx.project_x(t.date)).sum();
+                for mut group in groups {
+                    let x_sum: f32 = group.iter().map(|t| ctx.project_x(t.date)).sum();
                     let x_center = x_sum / group.len() as f32;
-                    let mut sorted_group = group.clone();
-                    sorted_group.sort_by_key(|t| std::cmp::Reverse(t.date));
+                    group.sort_by_key(|t| std::cmp::Reverse(t.date));
 
                     struct StackItem {
                         text: String,
                         color: Rgba<u8>,
                     }
                     let mut items = Vec::new();
-                    for t in sorted_group {
+                    for t in group {
                         if let Some(ins) = t.insulin {
                             items.push(StackItem {
                                 text: format!("{:.1}u", ins),
@@ -1254,6 +1475,304 @@ impl<'a> GlucoseGraphBuilder<'a> {
         }
     }
 
+    /// Samples a mini graph's series once per pixel column of the plot.
+    /// Columns are `None` where there is nothing to draw: outside or across a
+    /// gap in reported values, or past "now" for ones from treatments.
+    fn lane_values(&self, ctx: &RenderContext, graph: &MiniGraph) -> Vec<Option<f32>> {
+        let vp = &ctx.viewport;
+        let times: Vec<chrono::DateTime<Utc>> = (vp.plot_left.round() as i32
+            ..=vp.plot_right.round() as i32)
+            .map(|x| {
+                let frac = (x as f32 - vp.plot_left) / vp.plot_w;
+                ctx.start_time + Duration::milliseconds((frac * ctx.time_span_secs * 1e3) as i64)
+            })
+            .collect();
+        let until = ctx.end_time.min(Utc::now());
+        let up_to_now = |values: Vec<f32>| {
+            values
+                .into_iter()
+                .zip(&times)
+                .map(|(v, &t)| (t <= until).then_some(v))
+                .collect()
+        };
+
+        let (MiniGraph::Iob(source) | MiniGraph::Cob(source)) = graph;
+        match source {
+            OnBoard::Reported(points) => interpolate_samples(points, &times),
+            OnBoard::FromTreatments(duration) => {
+                let amount = graph.style(&self.theme).amount;
+                let doses: Vec<(chrono::DateTime<Utc>, f32)> = self
+                    .treatments
+                    .iter()
+                    .filter_map(|t| amount(t).map(|a| (t.date, a)))
+                    .collect();
+                up_to_now(linear_on_board(doses, *duration, &times))
+            }
+        }
+    }
+
+    /// Draws one mini graph in its lane: a line over a soft gradient area
+    /// reaching down to a zero baseline, its name in the left margin, a marker
+    /// for each of its treatments, and its peak value, which gives the curve
+    /// its scale.
+    fn draw_lane(
+        &self,
+        img: &mut RgbaImage,
+        ctx: &RenderContext,
+        lane: &Lane,
+        treatments: &[&GraphTreatment],
+    ) {
+        let vp = &ctx.viewport;
+        let s = vp.s;
+        let font_size_sm = (24.0 + 1.0) * s;
+        let font_size_xs = (20.0 + 1.0) * s;
+        let panel = self.panel_color();
+        let graph = &self.mini_graphs[lane.graph];
+        let style = graph.style(&self.theme);
+        let (color, name, floor) = (style.color, style.name, style.floor);
+
+        // Lane name, right-aligned with the glucose axis labels.
+        let label_right = vp.plot_left - PANEL_PAD * s - 12.0 * s;
+        let dim = text_dimensions(name, font_size_sm, ctx.font);
+        draw_text_mut(
+            img,
+            color,
+            (label_right - dim.0) as i32,
+            ((lane.top + lane.bottom - dim.1) / 2.0) as i32,
+            PxScale::from(font_size_sm),
+            ctx.font,
+            name,
+        );
+
+        let values = self.lane_values(ctx, graph);
+        let (lo, hi) = min_max(values.iter().flatten().copied());
+        // Negative IOB (suspended basal) dips below the baseline.
+        let v_min = lo.min(0.0);
+        let v_max = hi.max(floor);
+        // Headroom so the peak label, centered on the peak, stays in the lane.
+        let top = lane.top + font_size_xs / 2.0;
+        let project = |v: f32| lane.bottom - (v - v_min) / (v_max - v_min) * (lane.bottom - top);
+        let zero_y = project(0.0);
+
+        // Zero baseline, as faint as the glucose gridlines.
+        let hairline = (1.0 * s).ceil() as u32;
+        let [lr, lg, lb, _] = self.theme.axis_lines.0;
+        blend_fast_rect(
+            img,
+            vp.plot_left as i32,
+            (zero_y - hairline as f32 / 2.0).round() as i32,
+            vp.plot_w as u32,
+            hairline,
+            Rgba([lr, lg, lb, 30]),
+        );
+
+        let x0 = vp.plot_left.round() as i32;
+        let ys: Vec<Option<f32>> = values.iter().map(|v| v.map(project)).collect();
+        fill_area(img, color, x0, &ys, zero_y);
+
+        // Stretches at zero are left to the baseline so the line only draws
+        // the eye where something is on board.
+        let resting: Vec<bool> = values
+            .iter()
+            .map(|v| v.is_some_and(|v| v.abs() < floor * 0.01))
+            .collect();
+        let half = (1.6 * s).round().max(1.0) as i32;
+        stroke_curve(
+            img,
+            &create_aa_circle_sprite(half, color),
+            x0,
+            &ys,
+            &resting,
+        );
+
+        let markers = self.draw_lane_treatments(img, ctx, &style, treatments, x0, &ys, zero_y);
+
+        // Peak value, beside whichever side keeps it clear of the line and
+        // the markers.
+        let peak = values
+            .iter()
+            .enumerate()
+            .filter_map(|(i, v)| v.map(|v| (i, v)))
+            .fold(None, |best: Option<(usize, f32)>, (i, v)| match best {
+                Some((_, b)) if b >= v => best,
+                _ => Some((i, v)),
+            });
+        let Some((i, peak)) = peak.filter(|&(_, v)| v >= floor * 0.05) else {
+            return;
+        };
+        let text = (style.format)(peak);
+        let dim = text_dimensions(&text, font_size_xs, ctx.font);
+
+        // A peak usually follows the dose or meal that caused it within a
+        // few minutes (microboluses can keep IOB climbing), so the label
+        // joins that marker. Otherwise the peak gets a ringed dot of its own.
+        let (px, py) = ((x0 + i as i32) as f32, project(peak));
+        let cause = markers
+            .iter()
+            .filter(|m| m.0 <= px + m.2 && px - m.0 <= dim.0)
+            .max_by(|a, b| a.0.total_cmp(&b.0));
+        let (px, py, marker_r) = match cause {
+            Some(&(mx, my, mr)) => (mx, my, mr),
+            None => {
+                let dot_r = (4.0 * s).round().max(2.0) as i32;
+                let ring =
+                    create_aa_circle_sprite(dot_r + (2.0 * s).round().max(1.0) as i32, panel);
+                blend_sprite(img, &ring, px as i32, py as i32);
+                blend_sprite(
+                    img,
+                    &create_aa_circle_sprite(dot_r, color),
+                    px as i32,
+                    py as i32,
+                );
+                (px, py, dot_r as f32)
+            }
+        };
+
+        let offset = marker_r + 8.0 * s;
+        // Kept inside the lane; a lane shorter than the label keeps its top.
+        let ty = (py - dim.1 / 2.0).min(lane.bottom - dim.1).max(lane.top);
+        // How many of the label's columns the line crosses, with any marker
+        // under the label counting as a whole label's worth.
+        let collisions = |tx: f32| {
+            let pad = half as f32 + 2.0 * s;
+            let (c0, c1) = ((tx as i32 - x0).max(0), (tx + dim.0) as i32 - x0);
+            let crossings = (c0..=c1)
+                .filter_map(|c| ys.get(c as usize).copied().flatten())
+                .filter(|&y| y >= ty - pad && y <= ty + dim.1 + pad)
+                .count();
+            let covered = markers
+                .iter()
+                .filter(|m| {
+                    rects_intersect(
+                        (
+                            tx as i32,
+                            ty as i32,
+                            (tx + dim.0) as i32,
+                            (ty + dim.1) as i32,
+                        ),
+                        (
+                            (m.0 - m.2) as i32,
+                            (m.1 - m.2) as i32,
+                            (m.0 + m.2) as i32,
+                            (m.1 + m.2) as i32,
+                        ),
+                    )
+                })
+                .count();
+            crossings + covered * dim.0 as usize
+        };
+        let sides = [px - offset - dim.0, px + offset];
+        let tx = sides
+            .into_iter()
+            .filter(|&tx| tx >= vp.plot_left && tx + dim.0 <= vp.plot_right)
+            .min_by_key(|&tx| collisions(tx))
+            .unwrap_or(sides[0].max(vp.plot_left));
+        draw_text_with_outline(
+            img,
+            color,
+            panel,
+            tx as i32,
+            ty as i32,
+            PxScale::from(font_size_xs),
+            ctx.font,
+            &text,
+        );
+    }
+
+    /// Marks every treatment a mini graph tracks on its curve (a triangle
+    /// per insulin dose, a dot per carb entry, like the contextual markers of
+    /// the glucose plot). Each sits where it makes the curve step up and is
+    /// sized by its amount against the largest, ringed in the panel color to
+    /// stand clear of the line. Microboluses get the smallest marker and no
+    /// ring, so a steady stream of them studs the line instead of breaking it
+    /// up.
+    ///
+    /// Returns the center and outer radius of each marker bar the
+    /// microboluses.
+    #[allow(clippy::too_many_arguments)]
+    fn draw_lane_treatments(
+        &self,
+        img: &mut RgbaImage,
+        ctx: &RenderContext,
+        style: &MiniGraphStyle,
+        treatments: &[&GraphTreatment],
+        x0: i32,
+        ys: &[Option<f32>],
+        zero_y: f32,
+    ) -> Vec<(f32, f32, f32)> {
+        let s = ctx.viewport.s;
+        let panel = self.panel_color();
+        let (color, amount) = (style.color, style.amount);
+        let is_micro = |v: f32| style.microboluses && v <= self.microbolus_threshold;
+
+        let amounts: Vec<(f32, f32)> = treatments
+            .iter()
+            .filter_map(|t| {
+                amount(t)
+                    .filter(|&v| v > 0.0)
+                    .map(|v| (ctx.project_x(t.date), v))
+            })
+            .collect();
+        let largest = amounts
+            .iter()
+            .map(|&(_, v)| v)
+            .filter(|&v| !is_micro(v))
+            .fold(0.0, f32::max);
+        let ring = (1.5 * s).max(1.0);
+
+        // Sizes repeat (every microbolus is the same), so each size's
+        // sprites are built once, keyed by the size in half pixels.
+        let mut sprites: std::collections::HashMap<(u32, bool), (Option<Sprite>, Sprite)> =
+            std::collections::HashMap::new();
+        amounts
+            .into_iter()
+            .filter_map(|(x, v)| {
+                let micro = is_micro(v);
+                // Square-root scaling keeps similar amounts similar in size
+                // while a small correction still reads as small.
+                let size = if micro {
+                    2.5 * s
+                } else {
+                    (4.5 + 3.5 * (v / largest).sqrt()) * s
+                };
+                let key = (size * 2.0).round().max(2.0) as u32;
+                let size = key as f32 / 2.0;
+                let (under, marker) =
+                    sprites
+                        .entry((key, micro))
+                        .or_insert_with(|| match style.marker {
+                            Marker::Triangle => (
+                                (!micro).then(|| create_aa_triangle_sprite(size, ring, panel)),
+                                create_aa_triangle_sprite(size, 0.0, color),
+                            ),
+                            // A dot reads as big as a triangle a size larger.
+                            Marker::Dot => (
+                                Some(create_aa_circle_sprite(
+                                    (size * 0.8 + ring).round() as i32,
+                                    panel,
+                                )),
+                                create_aa_circle_sprite((size * 0.8).round() as i32, color),
+                            ),
+                        });
+
+                // The first columns at or after the treatment hold the top of
+                // the step it causes.
+                let col = (x.ceil() as i32 - x0).max(0) as usize;
+                let y = [col, col + 1]
+                    .into_iter()
+                    .filter_map(|c| ys.get(c).copied().flatten())
+                    .reduce(f32::min)
+                    .unwrap_or(zero_y);
+                let (cx, cy) = (x.round() as i32, y.round() as i32);
+                if let Some(under) = under {
+                    blend_sprite(img, under, cx, cy);
+                }
+                blend_sprite(img, marker, cx, cy);
+                (!micro).then_some((x, y, size + ring))
+            })
+            .collect()
+    }
+
     /// Draws the status-colored line connecting consecutive readings. Sits
     /// underneath the circles and turns a loose scatter of dots into one
     /// continuous, easy-to-follow trace.
@@ -1276,8 +1795,8 @@ impl<'a> GlucoseGraphBuilder<'a> {
             .windows(2)
             .map(|w| (w[1].date - w[0].date).num_seconds())
             .collect();
-        gaps.sort_unstable();
-        let median_gap = gaps[gaps.len() / 2].max(1);
+        let mid = gaps.len() / 2;
+        let median_gap = (*gaps.select_nth_unstable(mid).1).max(1);
         let max_gap = (median_gap as f32 * 2.5) as i64;
 
         // Line a little thinner than the markers so the dots still lead.
@@ -1285,10 +1804,10 @@ impl<'a> GlucoseGraphBuilder<'a> {
         let point_radius = (base_point_radius + 1.0) * ctx.viewport.s;
         let trace_half = (point_radius * 0.45).round().max(1.0) as i32;
 
-        let (size, sp_high) = create_aa_circle_sprite(trace_half, self.theme.glucose_high);
-        let (_, sp_low) = create_aa_circle_sprite(trace_half, self.theme.glucose_low);
-        let (_, sp_range) = create_aa_circle_sprite(trace_half, self.theme.glucose_in_range);
-        let pick = |sgv: f32| -> &[u8] {
+        let sp_high = create_aa_circle_sprite(trace_half, self.theme.glucose_high);
+        let sp_low = create_aa_circle_sprite(trace_half, self.theme.glucose_low);
+        let sp_range = create_aa_circle_sprite(trace_half, self.theme.glucose_in_range);
+        let pick = |sgv: f32| -> &Sprite {
             if sgv > self.target_high {
                 &sp_high
             } else if sgv < self.target_low {
@@ -1323,7 +1842,7 @@ impl<'a> GlucoseGraphBuilder<'a> {
                     continue;
                 }
                 let sgv = a.sgv + (b.sgv - a.sgv) * t;
-                blend_sprite(img, pick(sgv), size, px, py);
+                blend_sprite(img, pick(sgv), px, py);
                 last_stamp = Some((px, py));
             }
         }
@@ -1340,10 +1859,9 @@ impl<'a> GlucoseGraphBuilder<'a> {
         let point_radius = (base_point_radius + 1.0) * ctx.viewport.s;
         let radius_i32 = point_radius.max(1.0) as i32;
 
-        let (sprite_size, sprite_high) =
-            create_aa_circle_sprite(radius_i32, self.theme.glucose_high);
-        let (_, sprite_low) = create_aa_circle_sprite(radius_i32, self.theme.glucose_low);
-        let (_, sprite_range) = create_aa_circle_sprite(radius_i32, self.theme.glucose_in_range);
+        let sprite_high = create_aa_circle_sprite(radius_i32, self.theme.glucose_high);
+        let sprite_low = create_aa_circle_sprite(radius_i32, self.theme.glucose_low);
+        let sprite_range = create_aa_circle_sprite(radius_i32, self.theme.glucose_in_range);
 
         let mut last_draw_pos: Option<(i32, i32)> = None;
         let min_dist_sq = (point_radius * 0.5).powf(2.0);
@@ -1368,7 +1886,7 @@ impl<'a> GlucoseGraphBuilder<'a> {
                 &sprite_range
             };
 
-            blend_sprite(img, sprite, sprite_size, ix, iy);
+            blend_sprite(img, sprite, ix, iy);
             last_draw_pos = Some((ix, iy));
         }
     }
@@ -1389,17 +1907,207 @@ fn is_round_ten(v: f32) -> bool {
     (v - (v / 10.0).round() * 10.0).abs() < 0.5
 }
 
-fn min_max(values: &[f32]) -> (f32, f32) {
+/// `(min, max)` of `values`, or `(f32::MAX, f32::MIN)` when empty.
+///
+/// Deliberately sequential: these are at most a few thousand floats, far too
+/// little work to pay for waking a thread pool.
+fn min_max(values: impl IntoIterator<Item = f32>) -> (f32, f32) {
     values
-        .par_iter()
-        .fold(
-            || (f32::MAX, f32::MIN),
-            |(min, max), &v| (min.min(v), max.max(v)),
-        )
-        .reduce(
-            || (f32::MAX, f32::MIN), // Identity for the reduction
-            |(min_a, max_a), (min_b, max_b)| (min_a.min(min_b), max_a.max(max_b)),
-        )
+        .into_iter()
+        .fold((f32::MAX, f32::MIN), |(min, max), v| {
+            (min.min(v), max.max(v))
+        })
+}
+
+/// The entry closest in time to `t` (whole-second resolution, earliest entry
+/// on ties), found by binary search in `entries`, which must be sorted by date.
+fn closest_entry(entries: &[GraphEntry], t: chrono::DateTime<Utc>) -> Option<&GraphEntry> {
+    let ts = t.timestamp();
+    let key = |e: &GraphEntry| e.date.timestamp();
+    // First entry at or after `t`: the closest one from the right.
+    let idx = entries.partition_point(|e| key(e) < ts);
+    // Closest from the left is the last timestamp before `t`; take the first
+    // entry sharing it so ties resolve to the earliest entry.
+    let before = idx.checked_sub(1).map(|i| {
+        let lts = key(&entries[i]);
+        &entries[entries.partition_point(|e| key(e) < lts)]
+    });
+    match (before, entries.get(idx)) {
+        (Some(l), Some(r)) if ts - key(l) <= key(r) - ts => Some(l),
+        (_, Some(r)) => Some(r),
+        (l, None) => l,
+    }
+}
+
+/// Fills the area between a lane's curve (`ys`, one per pixel column from
+/// `x0`) and its zero line with a vertical gradient of `color`, strongest at
+/// the curve. Blended in integer math with the alpha stepping linearly per
+/// row, as this touches every pixel under the curve.
+fn fill_area(img: &mut RgbaImage, color: Rgba<u8>, x0: i32, ys: &[Option<f32>], zero_y: f32) {
+    const FILL_AT_CURVE: f32 = 64.0;
+    const FILL_AT_ZERO: f32 = 6.0;
+    let (img_w, img_h) = (img.width() as i32, img.height() as i32);
+    let stride = img_w as usize * 4;
+    let [cr, cg, cb] = [color[0], color[1], color[2]].map(|c| c as u32);
+    let raw = img.as_mut();
+    for (i, y) in ys.iter().enumerate() {
+        let (Some(y), x) = (*y, x0 + i as i32) else {
+            continue;
+        };
+        if !(0..img_w).contains(&x) {
+            continue;
+        }
+        let (from, to) = (y.min(zero_y), y.max(zero_y));
+        let rows = (from.round() as i32).max(0)..(to.round() as i32).min(img_h);
+        if rows.is_empty() {
+            continue;
+        }
+        // Alpha at the first row, then its change per row going down:
+        // fading when the curve is above zero, strengthening below it.
+        let slope = (FILL_AT_ZERO - FILL_AT_CURVE) / (to - from).max(1.0);
+        let first = rows.start as f32 + 0.5;
+        let (mut a, step) = if y <= zero_y {
+            (FILL_AT_CURVE + slope * (first - y), slope)
+        } else {
+            (FILL_AT_CURVE + slope * (y - first), -slope)
+        };
+        let mut idx = rows.start as usize * stride + x as usize * 4;
+        for _ in rows {
+            let ai = (a.clamp(FILL_AT_ZERO, FILL_AT_CURVE) * 256.0 / 255.0) as u32;
+            let inv = 256 - ai;
+            let px = &mut raw[idx..idx + 3];
+            px[0] = ((cr * ai + px[0] as u32 * inv) >> 8) as u8;
+            px[1] = ((cg * ai + px[1] as u32 * inv) >> 8) as u8;
+            px[2] = ((cb * ai + px[2] as u32 * inv) >> 8) as u8;
+            a += step;
+            idx += stride;
+        }
+    }
+}
+
+/// Draws a lane's curve (`ys`, one per pixel column from `x0`) by stamping
+/// `pen` along it, like the glucose trace. Segments between two `resting`
+/// columns are skipped, and a lone sample still gets a dot.
+fn stroke_curve(img: &mut RgbaImage, pen: &Sprite, x0: i32, ys: &[Option<f32>], resting: &[bool]) {
+    let mut last_stamp: Option<(i32, i32)> = None;
+    for i in 0..ys.len() {
+        let Some(ya) = ys[i] else {
+            continue;
+        };
+        let next = ys.get(i + 1).copied().flatten();
+        let flat = resting[i] && resting.get(i + 1).copied().unwrap_or(false);
+        let (Some(yb), false) = (next, flat) else {
+            let prev = i.checked_sub(1).and_then(|j| ys[j]);
+            if prev.is_none() && next.is_none() && !resting[i] {
+                blend_sprite(img, pen, x0 + i as i32, ya.round() as i32);
+            }
+            last_stamp = None;
+            continue;
+        };
+        let xa = (x0 + i as i32) as f32;
+        let steps = (1.0 + (yb - ya) * (yb - ya)).sqrt().ceil() as i32;
+        for k in 0..=steps {
+            let t = k as f32 / steps as f32;
+            let p = ((xa + t).round() as i32, (ya + (yb - ya) * t).round() as i32);
+            if last_stamp != Some(p) {
+                blend_sprite(img, pen, p.0, p.1);
+                last_stamp = Some(p);
+            }
+        }
+    }
+}
+
+/// The total still on board at each of the ascending `times`, when every
+/// `(date, amount)` counts in full at its date and fades linearly to nothing
+/// over `duration`.
+///
+/// The doses on board at a time `t` are exactly those given in
+/// `(t - duration, t]`, and their total is `Σa - (t·Σa - Σa·d) / duration`,
+/// so only the two sums need updating as that window slides along.
+fn linear_on_board(
+    mut doses: Vec<(chrono::DateTime<Utc>, f32)>,
+    duration: Duration,
+    times: &[chrono::DateTime<Utc>],
+) -> Vec<f32> {
+    let span = duration.num_milliseconds() as f64;
+    if span <= 0.0 {
+        return vec![0.0; times.len()];
+    }
+    doses.sort_by_key(|&(date, _)| date);
+    // Milliseconds from the first time keep the sums well within f64.
+    let origin = times.first().map_or(0, |t| t.timestamp_millis());
+    let ms = |t: chrono::DateTime<Utc>| (t.timestamp_millis() - origin) as f64;
+    let doses: Vec<(f64, f64)> = doses.into_iter().map(|(d, a)| (ms(d), a as f64)).collect();
+
+    let (mut lo, mut hi) = (0, 0);
+    let (mut sum, mut weighted) = (0.0, 0.0);
+    times
+        .iter()
+        .map(|&t| {
+            let t = ms(t);
+            while hi < doses.len() && doses[hi].0 <= t {
+                sum += doses[hi].1;
+                weighted += doses[hi].1 * doses[hi].0;
+                hi += 1;
+            }
+            while lo < hi && t - doses[lo].0 >= span {
+                sum -= doses[lo].1;
+                weighted -= doses[lo].1 * doses[lo].0;
+                lo += 1;
+            }
+            if lo == hi {
+                // Nothing on board; also clears rounding left in the sums.
+                (sum, weighted) = (0.0, 0.0);
+                return 0.0;
+            }
+            (sum - (t * sum - weighted) / span) as f32
+        })
+        .collect()
+}
+
+/// Linearly interpolates date-sorted `points` at each of the ascending
+/// `times`. `None` outside the points, and across gaps well beyond their usual
+/// spacing (never closer than 15 minutes, as AID systems skip the odd upload)
+/// so a missing stretch is not drawn as a made-up line.
+fn interpolate_samples(
+    points: &[SeriesPoint],
+    times: &[chrono::DateTime<Utc>],
+) -> Vec<Option<f32>> {
+    let max_gap = if points.len() > 1 {
+        let mut gaps: Vec<i64> = points
+            .windows(2)
+            .map(|w| (w[1].date - w[0].date).num_seconds())
+            .collect();
+        let mid = gaps.len() / 2;
+        let median_gap = *gaps.select_nth_unstable(mid).1;
+        ((median_gap as f32 * 2.5) as i64).max(15 * 60)
+    } else {
+        0
+    };
+
+    let mut k = 0;
+    times
+        .iter()
+        .map(|&t| {
+            while k + 1 < points.len() && points[k + 1].date <= t {
+                k += 1;
+            }
+            let a = points.get(k)?;
+            if t < a.date {
+                return None;
+            }
+            if t == a.date {
+                return Some(a.value);
+            }
+            let b = points.get(k + 1)?;
+            let span = b.date - a.date;
+            if span.num_seconds() > max_gap {
+                return None;
+            }
+            let f = (t - a.date).num_milliseconds() as f32 / span.num_milliseconds() as f32;
+            Some(a.value + (b.value - a.value) * f)
+        })
+        .collect()
 }
 
 fn calculate_dynamic_size(
@@ -1418,4 +2126,226 @@ fn calculate_dynamic_size(
 
 fn rects_intersect(a: (i32, i32, i32, i32), b: (i32, i32, i32, i32)) -> bool {
     a.0 < b.2 && a.2 > b.0 && a.1 < b.3 && a.3 > b.1
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::TimeZone;
+
+    fn at(minutes: i64) -> chrono::DateTime<Utc> {
+        Utc.with_ymd_and_hms(2026, 1, 1, 0, 0, 0).unwrap() + Duration::minutes(minutes)
+    }
+
+    fn point(minutes: i64, value: f32) -> SeriesPoint {
+        SeriesPoint {
+            value,
+            date: at(minutes),
+        }
+    }
+
+    #[test]
+    fn samples_interpolate_between_points_only() {
+        let points = [point(0, 1.0), point(5, 2.0), point(10, 4.0)];
+        let times: Vec<_> = [-1, 0, 2, 5, 10, 11].map(at).to_vec();
+        let values = interpolate_samples(&points, &times);
+        assert_eq!(values[0], None);
+        assert_eq!(values[1], Some(1.0));
+        assert!((values[2].unwrap() - 1.4).abs() < 1e-6);
+        assert_eq!(values[3], Some(2.0));
+        assert_eq!(values[4], Some(4.0));
+        assert_eq!(values[5], None);
+    }
+
+    #[test]
+    fn doses_fade_linearly_over_the_duration() {
+        let doses = vec![(at(0), 4.0)];
+        let times: Vec<_> = [-1, 0, 60, 120, 239, 240, 300].map(at).to_vec();
+        let values = linear_on_board(doses, Duration::hours(4), &times);
+        let expected = [0.0, 4.0, 3.0, 2.0, 4.0 / 240.0, 0.0, 0.0];
+        for (v, e) in values.iter().zip(expected) {
+            assert!((v - e).abs() < 1e-4, "{values:?}");
+        }
+    }
+
+    #[test]
+    fn overlapping_doses_add_up() {
+        // 2u at 0 and 3u at 30 min, 1 hour duration.
+        let doses = vec![(at(30), 3.0), (at(0), 2.0)];
+        let times: Vec<_> = [15, 30, 45, 60, 75, 90].map(at).to_vec();
+        let values = linear_on_board(doses, Duration::hours(1), &times);
+        let expected = [1.5, 1.0 + 3.0, 0.5 + 2.25, 1.5, 0.75, 0.0];
+        for (v, e) in values.iter().zip(expected) {
+            assert!((v - e).abs() < 1e-4, "{values:?}");
+        }
+    }
+
+    #[test]
+    fn no_duration_means_nothing_on_board() {
+        let values = linear_on_board(vec![(at(0), 5.0)], Duration::zero(), &[at(0), at(1)]);
+        assert_eq!(values, vec![0.0, 0.0]);
+    }
+
+    #[test]
+    fn samples_leave_long_gaps_open() {
+        // 5 minute cadence with a 40 minute hole.
+        let points: Vec<_> = [0, 5, 10, 50, 55, 60].map(|m| point(m, 1.0)).to_vec();
+        let values = interpolate_samples(&points, &[at(8), at(30), at(52)]);
+        assert_eq!(values, vec![Some(1.0), None, Some(1.0)]);
+    }
+
+    #[test]
+    fn samples_handle_empty_and_single_points() {
+        assert_eq!(interpolate_samples(&[], &[at(0)]), vec![None]);
+        let single = [point(0, 3.0)];
+        assert_eq!(
+            interpolate_samples(&single, &[at(-1), at(0), at(1)]),
+            vec![None, Some(3.0), None]
+        );
+    }
+
+    fn graph() -> GlucoseGraphBuilder<'static> {
+        let entries: Vec<GraphEntry> = (0..=36)
+            .map(|i| GraphEntry {
+                sgv: 110.0 + i as f32,
+                date: at(i * 5),
+            })
+            .collect();
+        let treatments = vec![GraphTreatment {
+            insulin: Some(3.0),
+            carbs: Some(40.0),
+            mbg: None,
+            date: at(30),
+            is_isf: false,
+        }];
+        GlucoseGraphBuilder::new()
+            .with_layout(LayoutConfig {
+                width: 600,
+                height: 400,
+                ..Default::default()
+            })
+            .with_entries(entries)
+            .with_treatments(treatments)
+    }
+
+    #[test]
+    fn mini_graphs_take_height_from_the_plot_and_move_the_axis() {
+        let plain = graph().calculate_viewport();
+        assert!(plain.lanes.is_empty());
+        assert_eq!(plain.axis_bottom, plain.plot_bottom);
+
+        let one = graph()
+            .add_mini_graph(MiniGraph::cob(Duration::hours(3)))
+            .calculate_viewport();
+        assert_eq!(one.lanes.len(), 1);
+        assert!(one.plot_bottom < plain.plot_bottom);
+        assert_eq!(one.axis_bottom, one.lanes[0].bottom);
+
+        let two = graph()
+            .add_mini_graph(MiniGraph::iob(Duration::hours(4)))
+            .add_mini_graph(MiniGraph::cob(Duration::hours(3)))
+            .calculate_viewport();
+        assert_eq!(two.lanes.len(), 2);
+        assert!(two.plot_bottom < one.plot_bottom);
+        assert_eq!(two.axis_bottom, two.lanes[1].bottom);
+        // Separate panels: a full gap and both paddings between the lanes.
+        let between = two.lanes[1].top - two.lanes[0].bottom;
+        assert_eq!(between, (2.0 * PANEL_PAD + PANEL_GAP) * two.s);
+        // Every lane keeps the same height, and the plot ends where the
+        // time axis always did.
+        assert_eq!(
+            two.lanes[0].bottom - two.lanes[0].top,
+            one.lanes[0].bottom - one.lanes[0].top
+        );
+        assert!((two.axis_bottom - plain.axis_bottom).abs() < 1e-3);
+    }
+
+    #[test]
+    fn mini_graphs_stack_in_the_order_added() {
+        let builder = graph()
+            .add_mini_graph(MiniGraph::cob_reported(vec![point(0, 1.0)]))
+            .add_mini_graph(MiniGraph::iob_reported(vec![point(0, 1.0)]));
+        assert!(matches!(builder.mini_graphs[0], MiniGraph::Cob(_)));
+        assert!(matches!(builder.mini_graphs[1], MiniGraph::Iob(_)));
+        let vp = builder.calculate_viewport();
+        assert_eq!(vp.lanes.iter().map(|l| l.graph).collect::<Vec<_>>(), [0, 1]);
+
+        let replaced = builder.with_mini_graphs([MiniGraph::iob_reported(vec![point(0, 1.0)])]);
+        assert_eq!(replaced.mini_graphs.len(), 1);
+        assert!(replaced
+            .with_mini_graphs([])
+            .calculate_viewport()
+            .lanes
+            .is_empty());
+    }
+
+    #[test]
+    fn glucose_plot_keeps_half_the_height_with_many_mini_graphs() {
+        let full = |b: GlucoseGraphBuilder<'static>| {
+            b.with_layout(LayoutConfig::default()).calculate_viewport()
+        };
+        let plain = full(graph());
+        let crowded =
+            full(graph().with_mini_graphs((0..4).map(|_| MiniGraph::iob(Duration::hours(4)))));
+        assert_eq!(crowded.lanes.len(), 4);
+        assert!(crowded.plot_h >= plain.plot_h * 0.5 - 1e-3);
+        assert!((crowded.axis_bottom - plain.axis_bottom).abs() < 1e-3);
+    }
+
+    #[test]
+    fn far_too_many_mini_graphs_still_build() {
+        let img = graph()
+            .with_mini_graphs((0..8).map(|_| MiniGraph::cob(Duration::hours(3))))
+            .build()
+            .expect("an overcrowded graph should still build");
+        assert_eq!(img.dimensions(), (600, 400));
+    }
+
+    #[test]
+    fn mini_graphs_render_with_awkward_data() {
+        let cases: Vec<Vec<SeriesPoint>> = vec![
+            vec![],
+            vec![point(60, 1.0)],
+            vec![point(-600, 2.0), point(-595, 2.0)],
+            (0..=36)
+                .map(|i| point(i * 5, -0.5 + (i % 7) as f32 * 0.4))
+                .collect(),
+            (0..=36).map(|i| point(i * 5, 0.0)).collect(),
+        ];
+        for points in cases {
+            let img = graph()
+                .add_mini_graph(MiniGraph::iob_reported(points.clone()))
+                .add_mini_graph(MiniGraph::cob_reported(points))
+                .build()
+                .expect("graph with mini graphs should build");
+            assert_eq!(img.dimensions(), (600, 400));
+        }
+    }
+
+    #[test]
+    fn mini_graphs_render_dense_microboluses() {
+        let mut builder = graph().with_microbolus_threshold(0.5);
+        builder.treatments.extend((0..36).map(|i| GraphTreatment {
+            insulin: Some(0.1 + (i % 4) as f32 * 0.1),
+            carbs: None,
+            mbg: None,
+            date: at(i * 5 + 2),
+            is_isf: true,
+        }));
+        let img = builder
+            .add_mini_graph(MiniGraph::iob(Duration::hours(4)))
+            .add_mini_graph(MiniGraph::cob(Duration::hours(3)))
+            .build()
+            .expect("graph with microbolus markers should build");
+        assert_eq!(img.dimensions(), (600, 400));
+    }
+
+    #[test]
+    fn no_extra_panel_without_mini_graphs() {
+        let img = graph().build().unwrap();
+        let vp = graph().calculate_viewport();
+        // Right under the glucose panel is plain background again.
+        let below = (vp.plot_bottom + PANEL_PAD * vp.s + 4.0) as u32;
+        assert_eq!(*img.get_pixel(300, below), Theme::dark().background);
+    }
 }

@@ -3,11 +3,11 @@ use std::path::PathBuf;
 use ab_glyph::{FontRef, PxScale};
 use image::imageops::FilterType;
 use image::{DynamicImage, Rgba, RgbaImage};
-use imageproc::drawing::{draw_antialiased_line_segment_mut, draw_text_mut};
+use imageproc::drawing::draw_antialiased_line_segment_mut;
 
 use crate::theme::Theme;
-use crate::utils::drawing::draw_filled_rounded_rect;
-use crate::utils::text::text_w;
+use crate::utils::drawing::{blend_image, card_canvas, draw_filled_rounded_rect};
+use crate::utils::text::{draw_text as draw_text_mut, text_w};
 
 /// Glucose status used for gradient color, main value color, and sparkline segment colors.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -182,10 +182,13 @@ impl<'a> BgCardBuilder<'a> {
         let w = (640.0 * s) as u32;
         let h = (320.0 * s) as u32;
 
-        let mut img = RgbaImage::from_pixel(w, h, self.theme.background);
-
-        draw_bg_pattern(&mut img, &self.theme, w, h, s);
-        draw_gradient(&mut img, &self.theme, data.status, w, h);
+        let mut img = card_canvas(
+            w,
+            h,
+            self.theme.background,
+            status_color(&self.theme, data.status),
+            s,
+        );
 
         #[cfg(feature = "beetroot")]
         if let Some(set) = self.sticker_set.as_ref() {
@@ -211,53 +214,6 @@ fn status_color(theme: &Theme, status: GlucoseStatus) -> Rgba<u8> {
         GlucoseStatus::Low => theme.glucose_low,
         GlucoseStatus::InRange => theme.glucose_in_range,
         GlucoseStatus::High => theme.glucose_high,
-    }
-}
-
-/// Subtle grid pattern drawn over the background before any content.
-fn draw_bg_pattern(img: &mut RgbaImage, theme: &Theme, w: u32, h: u32, s: f32) {
-    let spacing = (64.0 * s) as u32;
-    let [br, bg, bb, ba] = theme.background.0;
-    let line = Rgba([
-        br.saturating_sub(7),
-        bg.saturating_sub(7),
-        bb.saturating_sub(7),
-        ba,
-    ]);
-    let mut x = spacing;
-    while x < w {
-        for y in 0..h {
-            img.put_pixel(x, y, line);
-        }
-        x += spacing;
-    }
-    let mut y = spacing;
-    while y < h {
-        for x in 0..w {
-            img.put_pixel(x, y, line);
-        }
-        y += spacing;
-    }
-}
-
-/// Draws the ambient gradient: status color fading from top.
-fn draw_gradient(img: &mut RgbaImage, theme: &Theme, status: GlucoseStatus, w: u32, h: u32) {
-    let c = status_color(theme, status);
-    let gh = (h as f32 * 0.5) as u32;
-
-    for y in 0..gh {
-        let a = 55.0_f32 * (1.0 - y as f32 / gh as f32) / 255.0;
-        let inv = 1.0 - a;
-        for x in 0..w {
-            let px = img.get_pixel_mut(x, y);
-            let [dr, dg, db, da] = px.0;
-            px.0 = [
-                (c[0] as f32 * a + dr as f32 * inv) as u8,
-                (c[1] as f32 * a + dg as f32 * inv) as u8,
-                (c[2] as f32 * a + db as f32 * inv) as u8,
-                da,
-            ];
-        }
     }
 }
 
@@ -444,6 +400,8 @@ fn draw_sparkline(img: &mut RgbaImage, theme: &Theme, points: &[SparklinePoint],
     const GRAD_ALPHA: f32 = 55.0;
     let img_w = img.width();
     let img_h = img.height();
+    let stride = img_w as usize * 4;
+    let raw: &mut [u8] = img.as_mut();
 
     for i in 0..points.len() - 1 {
         let p0 = &points[i];
@@ -457,7 +415,8 @@ fn draw_sparkline(img: &mut RgbaImage, theme: &Theme, points: &[SparklinePoint],
             (x1 as i32).max(0) as u32
         } else {
             (x1.ceil() as i32).min(img_w as i32) as u32
-        };
+        }
+        .min(img_w);
 
         for col in col_start..col_end {
             let frac = if x1 > x0 {
@@ -472,14 +431,11 @@ fn draw_sparkline(img: &mut RgbaImage, theme: &Theme, points: &[SparklinePoint],
             for row in fill_top..fill_bot {
                 let a = GRAD_ALPHA * (1.0 - (row as f32 - curve_y) / grad_h) / 255.0;
                 let inv = 1.0 - a;
-                let px = img.get_pixel_mut(col, row);
-                let [dr, dg, db, da] = px.0;
-                px.0 = [
-                    (color[0] as f32 * a + dr as f32 * inv) as u8,
-                    (color[1] as f32 * a + dg as f32 * inv) as u8,
-                    (color[2] as f32 * a + db as f32 * inv) as u8,
-                    da,
-                ];
+                let i = row as usize * stride + col as usize * 4;
+                let px = &mut raw[i..i + 3];
+                px[0] = (color[0] as f32 * a + px[0] as f32 * inv) as u8;
+                px[1] = (color[1] as f32 * a + px[1] as f32 * inv) as u8;
+                px[2] = (color[2] as f32 * a + px[2] as f32 * inv) as u8;
             }
         }
     }
@@ -538,30 +494,7 @@ fn draw_pill_icon(img: &mut RgbaImage, icon_src: &DynamicImage, x: i32, y: i32, 
         return;
     }
     let resized = icon_src.resize_exact(size, size, FilterType::Lanczos3);
-    let rgba = resized.to_rgba8();
-
-    let img_w = img.width() as i32;
-    let img_h = img.height() as i32;
-
-    for (sx, sy, pixel) in rgba.enumerate_pixels() {
-        let px = x + sx as i32;
-        let py = y + sy as i32;
-        if px < 0 || py < 0 || px >= img_w || py >= img_h {
-            continue;
-        }
-        let alpha = pixel.0[3] as f32 / 255.0;
-        if alpha == 0.0 {
-            continue;
-        }
-        let inv = 1.0 - alpha;
-        let dst = img.get_pixel_mut(px as u32, py as u32);
-        dst.0 = [
-            (pixel.0[0] as f32 * alpha + dst.0[0] as f32 * inv) as u8,
-            (pixel.0[1] as f32 * alpha + dst.0[1] as f32 * inv) as u8,
-            (pixel.0[2] as f32 * alpha + dst.0[2] as f32 * inv) as u8,
-            dst.0[3],
-        ];
-    }
+    blend_image(img, &resized.into_rgba8(), x, y, 1.0);
 }
 
 /// Draws the info pill (rounded rect + icon + text) in the top-right of the card.
