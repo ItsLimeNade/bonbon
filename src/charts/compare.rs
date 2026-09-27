@@ -48,7 +48,7 @@ pub struct NightTargets {
 impl NightTargets {
     /// Whether `minute` of the day falls in the night, which may wrap past
     /// midnight.
-    fn covers(&self, minute: f32) -> bool {
+    pub(crate) fn covers(&self, minute: f32) -> bool {
         let (from, until) = (minutes_of(self.from), minutes_of(self.until));
         if from <= until {
             (from..until).contains(&minute)
@@ -1018,7 +1018,7 @@ fn days_label(from: DateTime<Utc>, to: DateTime<Utc>) -> String {
 }
 
 /// "30 Aug – 12 Sep" in `timezone`, with years when they differ.
-fn dates_label(from: DateTime<Utc>, to: DateTime<Utc>, timezone: Tz) -> String {
+pub(crate) fn dates_label(from: DateTime<Utc>, to: DateTime<Utc>, timezone: Tz) -> String {
     let (from, to) = (from.with_timezone(&timezone), to.with_timezone(&timezone));
     let pattern = if from.year_ce() != to.year_ce() {
         "%-d %b %Y"

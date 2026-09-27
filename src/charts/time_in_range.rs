@@ -391,7 +391,7 @@ fn display_bands(stats: &TirStats, include_extremes: bool) -> Vec<DisplayBand> {
     }
 }
 
-fn band_color(theme: &Theme, band: TirBand) -> Rgba<u8> {
+pub(crate) fn band_color(theme: &Theme, band: TirBand) -> Rgba<u8> {
     match band {
         TirBand::VeryLow => darken_color(theme.glucose_low, 0.62),
         TirBand::Low => theme.glucose_low,

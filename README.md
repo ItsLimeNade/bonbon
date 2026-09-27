@@ -25,6 +25,7 @@ Bonbon is a fast, customizable graph rendering library designed for diabetes rel
 - **Mini Graphs**: Optional insulin and carbs on board graphs under the glucose graph, from your treatments faded over a duration you set, or from your AID system's reported values
 - **BG Card**: Compact status card showing current glucose, trend, delta, IOB/COB, and a 3 hour sparkline
 - **Percentile Graph**: A typical day summarized from any number of days: the median with 25–75% and 5–95% bands (an Ambulatory Glucose Profile), colored by glucose status
+- **Breakdown Graph**: Time in range for each hour of the day or each day of the week, with the change from the previous period
 - **Compare Graph**: Two periods side by side, each with its typical day and average, GMI, SD and CV, plus the change between them
 - **Time in Range Card**: TIR summary with a stacked band bar, per-band durations and counts, plus average, SD, CV and GMI statistics
 
@@ -117,6 +118,27 @@ The bands are configurable, e.g. a single 15th–75th band with the median:
 ```
 
 `PercentileProfile::compute` returns the numbers without rendering an image.
+
+---
+
+## Breakdown Graph
+
+The Breakdown Graph splits time in range by hour of the day or by day of the week, from the same builder. Each column gets a bar stacked from very low to very high and its time in range, and given the previous period, a chip with how it changed (green-tinted when it went up, orange when it went down). All 24 hours fit in one 16:9 image, and night hours are shaded when night targets are set.
+
+<p align="center">
+  <img src="assets/images/example_breakdown_hourly.png" alt="Breakdown Graph by hour" width="800">
+  <img src="assets/images/example_breakdown_weekly.png" alt="Breakdown Graph by day of the week" width="800">
+</p>
+
+```rust
+let by_hour = BreakdownGraphBuilder::new()
+    .with_entries(last_14_days)
+    .with_previous(previous_14_days)
+    .with_grouping(Grouping::Hour) // or Grouping::Weekday
+    .with_targets(80.0, 180.0)
+    .with_timezone(chrono_tz::Europe::Paris)
+    .build()?;
+```
 
 ---
 
