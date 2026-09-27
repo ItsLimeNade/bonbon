@@ -2248,7 +2248,7 @@ mod tests {
             vec![None, Some(3.0), None]
         );
     }
-    #[test]
+
     fn graph() -> GlucoseGraphBuilder<'static> {
         let entries: Vec<GraphEntry> = (0..=36)
             .map(|i| GraphEntry {
@@ -2396,6 +2396,8 @@ mod tests {
             }
         }
     }
+
+    #[test]
     fn mini_graphs_take_height_from_the_plot_and_move_the_axis() {
         let plain = graph().calculate_viewport();
         assert!(plain.lanes.is_empty());
