@@ -8,7 +8,7 @@
 //!
 //! * **High Performance**: Tight, allocation-light pixel loops and pre-computed sprites and glyph masks, with no thread pool to spin up.
 //! * **Dynamic Scaling**: Automatically adjusts Y-axis bounds based on data range.
-//! * **Flexible Unit Support**: Native support for mg/dL and mmol/L, including dual-unit display modes.
+//! * **Flexible Unit Support**: Every graph and card renders in mg/dL, mmol/L, or both at once ([`models::UnitDisplay`]).
 //! * **Treatment Visualization**: Render insulin boluses, carbohydrate intake, and manual fingerstick calibrations.
 //! * **Breakdown Graph**: Time in range per hour or per weekday, with the change from a previous period.
 //! * **Compare Graph**: Two periods side by side with their typical days and statistics.

@@ -16,7 +16,7 @@ Bonbon is a fast, customizable graph rendering library designed for diabetes rel
 
 ## Features
 
-- **Flexible Units**: Support for mg/dL, mmol/L, or dual-unit display
+- **Flexible Units**: Every graph and card takes `with_units`: mg/dL, mmol/L, or both at once, with the second unit repeated smaller next to each glucose value
 - **Treatment Visualization**: Insulin boluses, carbohydrate entries, and manual BG readings
 - **Customizable Themes**: 6 built-in themes. (See `Theme::builtins()`) with full customization support
 - **Dynamic Scaling**: Automatic Y-axis scaling based on glucose values
@@ -74,7 +74,7 @@ let graph = GlucoseGraphBuilder::new()
 
 ## BG Card
 
-The BG Card is a compact 640×320 status card (scalable via `with_scale`) that renders current glucose, trend arrow, delta, age, IOB/COB, and a color-coded 3-hour sparkline with an ambient gradient fill.
+The BG Card is a compact 640×320 status card (scalable via `with_scale`) that renders current glucose, trend arrow, delta, age, IOB/COB, and a color-coded 3-hour sparkline with an ambient gradient fill. The current value and delta are given in mg/dL and shown in the unit set with `with_units`.
 
 <p align="center">
   <img src="assets/images/example_in_range_card.png" alt="BG Card - In Range" width="640">
