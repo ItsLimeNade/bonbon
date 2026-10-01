@@ -1,6 +1,6 @@
 [package]
 name = "bonbon"
-version = "0.5.0"
+version = "0.6.0"
 edition = "2021"
 repository = "https://github.com/ItsLimeNade/bonbon"
 homepage = "https://github.com/ItsLimeNade/bonbon?tab=readme-ov-file"
@@ -20,11 +20,11 @@ imageproc = { version = "0.26.0", default-features = false, features = ["rayon"]
 serde = {version = "1.0.228", features = ["derive"]}
 serde_json = "1.0.149"
 thiserror = "2.0.17"
-cinnamon = {version = "1.0.1", optional = true}
+cinnamon = {version = "2.0.0-alpha.1", optional = true}
 
 [dev-dependencies]
 tokio = { version = "1", features = ["full"] }
-cinnamon = "1.0.1"
+cinnamon = "2.0.0-alpha.1"
 
 
 [features]
