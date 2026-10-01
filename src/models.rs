@@ -18,13 +18,16 @@ pub struct GraphTreatment {
     pub is_isf: bool, // Distinguish SMBs/Microboluses if needed
 }
 
-/// Preferences for unit display.
+/// Preferences for unit display, taken by every graph and card's
+/// `with_units`. Values are always given in mg/dL; this only sets how they
+/// are shown.
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub enum UnitDisplay {
     #[default]
     MgDl,
     MmolL,
-    /// Shows both, with the first type as the primary (larger) label.
+    /// Shows both: every glucose value in the primary unit, repeated smaller
+    /// and dimmer in the other one.
     Dual {
         primary: UnitPreference,
     },

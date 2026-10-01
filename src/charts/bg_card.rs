@@ -5,9 +5,11 @@ use image::imageops::FilterType;
 use image::{DynamicImage, Rgba, RgbaImage};
 use imageproc::drawing::draw_antialiased_line_segment_mut;
 
+use crate::models::UnitDisplay;
 use crate::theme::Theme;
+use crate::utils::axis::{fmt_delta, fmt_glucose, fmt_glucose_unit, unit_name, units};
 use crate::utils::drawing::{blend_image, card_canvas, draw_filled_rounded_rect};
-use crate::utils::text::{draw_text as draw_text_mut, text_w};
+use crate::utils::text::{draw_text as draw_text_mut, draw_text_runs, text_w};
 
 /// Glucose status used for gradient color, main value color, and sparkline segment colors.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -81,6 +83,9 @@ pub struct SparklinePoint {
 }
 
 /// All pre-calculated, pre-formatted data for a BgCard.
+///
+/// Glucose values are in mg/dL whatever the card displays: the unit is set
+/// with [`BgCardBuilder::with_units`].
 #[derive(Debug)]
 pub struct BgCardData {
     /// Current glucose value in mg/dL.
@@ -89,14 +94,13 @@ pub struct BgCardData {
     pub status: GlucoseStatus,
     /// Trend arrow as a single Unicode character. E.g., `"→"`, `"↑"`, `"↗"`, `"↓"`.
     pub trend_arrow: String,
-    /// Pre-formatted delta with sign. E.g., `"+3 mg/dl"`, `"-2 mmol/L"`.
-    pub delta_str: String,
+    /// Change since the previous reading in mg/dL, shown signed in the
+    /// card's unit. E.g., `Some(3.0)` for `"+3 mg/dL"`. `None` hides the field.
+    pub delta: Option<f32>,
     /// Watermark displayed at the top right of the card.
     pub watermark_str: String,
     /// Pre-formatted data age. E.g., `"3 min ago"`, `"just now"`.
     pub age_str: String,
-    /// Unit label. E.g., `"mg/dl"` or `"mmol/L"`.
-    pub unit_str: String,
     /// Current local time for the header. E.g., `"15:45"`.
     pub time_str: String,
     /// Insulin on board, pre-formatted. E.g., `"IOB 2.5u"`. `None` hides the field.
@@ -114,6 +118,7 @@ pub struct BgCardData {
 /// Produces a fixed **640 × 320 px** RGBA image (or scaled up via `with_scale`).
 pub struct BgCardBuilder<'a> {
     data: Option<BgCardData>,
+    unit_display: UnitDisplay,
     theme: Theme,
     font: &'a [u8],
     scale: f32,
@@ -132,6 +137,7 @@ impl<'a> BgCardBuilder<'a> {
         const DEFAULT_FONT: &[u8] = include_bytes!("../../assets/fonts/GeistMono-Regular.ttf");
         Self {
             data: None,
+            unit_display: UnitDisplay::MgDl,
             theme: Theme::dark(),
             font: DEFAULT_FONT,
             scale: 1.0,
@@ -152,6 +158,13 @@ impl<'a> BgCardBuilder<'a> {
 
     pub fn with_data(mut self, data: BgCardData) -> Self {
         self.data = Some(data);
+        self
+    }
+
+    /// Unit the current value and its delta are shown in. `Dual` repeats
+    /// both in the other unit, smaller, beside the first. Default: mg/dL.
+    pub fn with_units(mut self, unit: UnitDisplay) -> Self {
+        self.unit_display = unit;
         self
     }
 
@@ -198,7 +211,7 @@ impl<'a> BgCardBuilder<'a> {
         }
 
         draw_header(&mut img, &self.theme, &font, &data, w, s);
-        draw_content(&mut img, &self.theme, &font, &data, w, s);
+        draw_content(&mut img, &self.theme, &font, &data, self.unit_display, w, s);
         draw_sparkline(&mut img, &self.theme, &data.sparkline_points, w, s);
 
         if let Some(pill) = &data.info_pill {
@@ -256,14 +269,18 @@ fn draw_header(
 }
 
 /// Draws the main content zone: age, SGV + trend, unit, delta, IOB, COB.
+/// With two units, the second one's value and delta follow the first's on
+/// the unit and delta lines.
 fn draw_content(
     img: &mut RgbaImage,
     theme: &Theme,
     font: &FontRef,
     data: &BgCardData,
+    unit: UnitDisplay,
     w: u32,
     s: f32,
 ) {
+    let (pref, second) = units(unit);
     let pad = 24.0 * s;
     let font_age = 16.0 * s;
     let font_sgv = 76.0 * s;
@@ -288,7 +305,11 @@ fn draw_content(
         &data.age_str,
     );
 
-    let value_str = format!("{:.0} {}", data.current_sgv, data.trend_arrow);
+    let value_str = format!(
+        "{} {}",
+        fmt_glucose(data.current_sgv, pref),
+        data.trend_arrow
+    );
     draw_text_mut(
         img,
         status_color(theme, data.status),
@@ -299,25 +320,41 @@ fn draw_content(
         &value_str,
     );
 
-    draw_text_mut(
+    let also = |text: String| format!(" · {text}");
+    let second_value = second.map(|u| also(fmt_glucose_unit(data.current_sgv, u)));
+    draw_text_runs(
         img,
-        theme.text_dim,
-        pad as i32,
-        unit_y as i32,
-        PxScale::from(font_unit),
         font,
-        &data.unit_str,
+        pad,
+        unit_y,
+        &[
+            (unit_name(pref), font_unit, theme.text_dim),
+            (
+                second_value.as_deref().unwrap_or(""),
+                font_unit,
+                theme.text_secondary,
+            ),
+        ],
     );
 
-    draw_text_mut(
-        img,
-        theme.text_primary,
-        pad as i32,
-        delta_y as i32,
-        PxScale::from(font_delta),
-        font,
-        &data.delta_str,
-    );
+    if let Some(delta) = data.delta {
+        let with_unit = |u| format!("{} {}", fmt_delta(delta, u), unit_name(u));
+        let second_delta = second.map(|u| also(with_unit(u)));
+        draw_text_runs(
+            img,
+            font,
+            pad,
+            delta_y,
+            &[
+                (&with_unit(pref), font_delta, theme.text_primary),
+                (
+                    second_delta.as_deref().unwrap_or(""),
+                    font_unit,
+                    theme.text_secondary,
+                ),
+            ],
+        );
+    }
 
     let x_right = w as f32 - pad;
     let gap = text_w(font, " ", font_iob_cob);

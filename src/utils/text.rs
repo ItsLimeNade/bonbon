@@ -161,6 +161,34 @@ pub(crate) fn draw_text_right(
     );
 }
 
+/// Draws `runs` of text one after the other from `x`, each with its own size
+/// and color, all on the baseline of the first, whose top is at `top`.
+pub(crate) fn draw_text_runs(
+    img: &mut RgbaImage,
+    font: &FontRef,
+    x: f32,
+    top: f32,
+    runs: &[(&str, f32, Rgba<u8>)],
+) {
+    let ascent = |size: f32| font.as_scaled(PxScale::from(size)).ascent();
+    let Some(baseline) = runs.first().map(|&(_, size, _)| top + ascent(size)) else {
+        return;
+    };
+    let mut x = x;
+    for &(text, size, color) in runs {
+        draw_text(
+            img,
+            color,
+            x as i32,
+            (baseline - ascent(size)).round() as i32,
+            PxScale::from(size),
+            font,
+            text,
+        );
+        x += text_w(font, text, size);
+    }
+}
+
 /// Real rendered width in pixels of `text` at `size`, using the same glyph
 /// advances `draw_text_mut` uses, so a box sized with this exactly fits the text.
 ///

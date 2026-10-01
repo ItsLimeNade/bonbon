@@ -6,13 +6,14 @@ use crate::models::{
     UnitDisplay, UnitPreference,
 };
 use crate::theme::Theme;
+use crate::utils::axis::{fmt_glucose, units};
 use crate::utils::color::darken_color;
 use crate::utils::drawing::{
     blend_fast_rect, blend_pixel, blend_sprite, canvas_with_rounded_rects, create_aa_circle_sprite,
     create_aa_triangle_sprite, draw_dashed_horizontal_line, draw_smart_circle, draw_smart_triangle,
     Sprite,
 };
-use crate::utils::text::{draw_text as draw_text_mut, draw_text_with_outline};
+use crate::utils::text::{draw_text as draw_text_mut, draw_text_with_outline, text_w};
 
 use ab_glyph::{FontRef, PxScale};
 use chrono::{Duration, Utc};
@@ -1481,27 +1482,39 @@ impl<'a> GlucoseGraphBuilder<'a> {
                     self.theme.glucose_reading_fill,
                 );
 
-                let (val_str, _) = match self.unit_display {
-                    UnitDisplay::MgDl
-                    | UnitDisplay::Dual {
-                        primary: UnitPreference::MgDl,
-                    } => (format!("{:.0}", mbg), "mg/dL"),
-                    UnitDisplay::MmolL
-                    | UnitDisplay::Dual {
-                        primary: UnitPreference::MmolL,
-                    } => (format!("{:.1}", mbg / 18.0), "mmol/L"),
-                };
-                let dim = text_dimensions(&val_str, font_size_xs, ctx.font);
+                // The value, followed by the second unit's when both are
+                // displayed, centered over the point as one label.
+                let (pref, second) = units(self.unit_display);
+                let val_str = fmt_glucose(mbg, pref);
+                let second_str = second.map(|u| format!(" {}", fmt_glucose(mbg, u)));
+                let val_w = text_w(ctx.font, &val_str, font_size_xs);
+                let second_w = second_str
+                    .as_deref()
+                    .map_or(0.0, |t| text_w(ctx.font, t, font_size_xs));
+                let label_x = x - (val_w + second_w) / 2.0;
+                let label_y = (y - outline_r as f32 - font_size_xs - 5.0 * ctx.viewport.s) as i32;
                 draw_text_with_outline(
                     img,
                     self.theme.text_primary,
                     self.theme.background,
-                    (x - dim.0 / 2.0) as i32,
-                    (y - outline_r as f32 - dim.1 - 5.0 * ctx.viewport.s) as i32,
+                    label_x as i32,
+                    label_y,
                     PxScale::from(font_size_xs),
                     ctx.font,
                     &val_str,
                 );
+                if let Some(second_str) = second_str {
+                    draw_text_with_outline(
+                        img,
+                        self.theme.text_secondary,
+                        self.theme.background,
+                        (label_x + val_w) as i32,
+                        label_y,
+                        PxScale::from(font_size_xs),
+                        ctx.font,
+                        &second_str,
+                    );
+                }
             }
         }
     }

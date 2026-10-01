@@ -9,10 +9,11 @@ use image::{Rgba, RgbaImage};
 use crate::charts::compare::{dates_label, NightTargets};
 use crate::charts::glucose::LayoutConfig;
 use crate::charts::time_in_range::{band_color, TirBand, TirThresholds};
-use crate::models::GraphEntry;
+use crate::models::{GraphEntry, UnitDisplay, UnitPreference};
 use crate::theme::Theme;
+use crate::utils::axis::{fmt_glucose, unit_name, units};
 use crate::utils::drawing::{blend_pixel, canvas_with_rounded_rects, draw_filled_rounded_rect};
-use crate::utils::text::{draw_text, text_w};
+use crate::utils::text::{draw_text, draw_text_right, text_w};
 
 /// How readings are split into columns.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -78,13 +79,15 @@ struct Split {
 /// each with a bar stacked from very low to very high and its time in range
 /// underneath. Given the period before (see
 /// [`with_previous`](Self::with_previous)), every column also gets a chip
-/// with how its time in range changed.
+/// with how its time in range changed. The target range the columns are
+/// measured against is shown top right, in the display unit.
 pub struct BreakdownGraphBuilder<'a> {
     entries: Vec<GraphEntry>,
     previous: Option<Vec<GraphEntry>>,
     grouping: Grouping,
     thresholds: TirThresholds,
     night: Option<NightTargets>,
+    unit_display: UnitDisplay,
     timezone: Tz,
     layout: LayoutConfig,
     theme: Theme,
@@ -108,6 +111,7 @@ impl<'a> BreakdownGraphBuilder<'a> {
             grouping: Grouping::Hour,
             thresholds: TirThresholds::default(),
             night: None,
+            unit_display: UnitDisplay::MgDl,
             timezone: chrono_tz::UTC,
             layout: LayoutConfig::default(),
             theme: Theme::dark(),
@@ -162,6 +166,13 @@ impl<'a> BreakdownGraphBuilder<'a> {
     /// columns are shaded.
     pub fn with_night_targets(mut self, night: NightTargets) -> Self {
         self.night = Some(night);
+        self
+    }
+
+    /// Sets the unit the target range is shown in, top right. `Dual` repeats
+    /// it in the other unit underneath. Default: mg/dL.
+    pub fn with_units(mut self, display: UnitDisplay) -> Self {
+        self.unit_display = display;
         self
     }
 
@@ -365,7 +376,8 @@ impl<'a> BreakdownGraphBuilder<'a> {
         );
     }
 
-    /// Title and dates, over a divider.
+    /// Title and dates on the left and the target range on the right, over a
+    /// divider.
     fn draw_header(
         &self,
         img: &mut RgbaImage,
@@ -393,15 +405,59 @@ impl<'a> BreakdownGraphBuilder<'a> {
         if let Some(p) = previous {
             dates = format!("{dates} vs {}", dates_label(p.from, p.to, self.timezone));
         }
+        let dates_top = l.top + size_title + 10.0 * s;
         draw_text(
             img,
             self.theme.text_secondary,
             l.left as i32,
-            (l.top + size_title + 10.0 * s) as i32,
+            dates_top as i32,
             PxScale::from(size_sub),
             font,
             &dates,
         );
+
+        // The day's target range, level with the title, and in the second
+        // unit level with the dates. Left out where it would run into them.
+        let (pref, second) = units(self.unit_display);
+        let range = |unit: UnitPreference| {
+            format!(
+                "{}–{} {}",
+                fmt_glucose(self.thresholds.low, unit),
+                fmt_glucose(self.thresholds.high, unit),
+                unit_name(unit)
+            )
+        };
+        let clear_of = |text: &str, size: f32, left_text: &str, left_size: f32| {
+            l.right - text_w(font, text, size)
+                >= l.left + text_w(font, left_text, left_size) + 32.0 * s
+        };
+        let target = format!("Target {}", range(pref));
+        let size_target = 22.0 * s;
+        if clear_of(&target, size_target, &title, size_title) {
+            draw_text_right(
+                img,
+                self.theme.text_secondary,
+                font,
+                size_target,
+                l.right,
+                l.top + (size_title - size_target) * 0.75,
+                &target,
+            );
+            if let Some(text) = second
+                .map(range)
+                .filter(|t| clear_of(t, size_sub, &dates, size_sub))
+            {
+                draw_text_right(
+                    img,
+                    self.theme.text_dim,
+                    font,
+                    size_sub,
+                    l.right,
+                    dates_top,
+                    &text,
+                );
+            }
+        }
 
         let [r, g, b, _] = self.theme.axis_lines.0;
         draw_filled_rounded_rect(

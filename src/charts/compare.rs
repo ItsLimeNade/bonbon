@@ -9,16 +9,17 @@ use image::{Rgba, RgbaImage};
 use crate::charts::glucose::LayoutConfig;
 use crate::charts::percentile::{curve_at, PercentileProfile};
 use crate::charts::time_in_range::{TirStats, TirThresholds};
-use crate::models::{GraphEntry, GraphScaling, UnitDisplay};
+use crate::models::{GraphEntry, GraphScaling, UnitDisplay, UnitPreference};
 use crate::theme::Theme;
 use crate::utils::axis::{
-    fmt_glucose, other_unit, round_step, round_ticks, unit_name, unit_preference,
+    fmt_glucose, fmt_glucose_unit, other_unit, round_step, round_ticks, unit_name, unit_preference,
+    units,
 };
 use crate::utils::drawing::{
     blend_fast_rect, blend_pixel, blend_sprite, canvas_with_rounded_rects, create_aa_circle_sprite,
     draw_dashed_horizontal_line, draw_filled_rounded_rect,
 };
-use crate::utils::text::{draw_text, draw_text_right, text_w};
+use crate::utils::text::{draw_text, draw_text_right, draw_text_runs, text_w};
 
 const MINUTES_PER_DAY: f32 = 24.0 * 60.0;
 
@@ -162,7 +163,8 @@ impl<'a> CompareGraphBuilder<'a> {
         self
     }
 
-    /// Sets the glucose unit.
+    /// Sets the glucose unit. `Dual` repeats every glucose value in the other
+    /// unit, smaller: on the axis, the target lines and the statistics.
     pub fn with_units(mut self, display: UnitDisplay) -> Self {
         self.unit_display = display;
         self
@@ -292,7 +294,8 @@ impl<'a> CompareGraphBuilder<'a> {
         let card = |x: f32| {
             let y = m_top;
             let header_bottom = y + pad + 44.0 * s;
-            let stats_top = y + card_h - pad - if dual { 118.0 } else { 104.0 } * s;
+            // With two units the statistics get a second line.
+            let stats_top = y + card_h - pad - if dual { 126.0 } else { 104.0 } * s;
             let plot = Plot {
                 left: x + pad + label_w + 16.0 * s,
                 right: x + card_w - pad,
@@ -497,17 +500,27 @@ impl<'a> CompareGraphBuilder<'a> {
     }
 
     /// Each target stretch's value in a solid pill on its line, near its
-    /// start. Drawn over the bars so it always reads.
+    /// start, followed by its value in the second unit when that fits the
+    /// stretch too. Drawn over the bars so it always reads.
     fn draw_target_tags(&self, img: &mut RgbaImage, plot: &Plot, font: &FontRef) {
         let s = self.scale();
-        let size = 17.0 * s;
+        let (size, size_second) = (17.0 * s, 14.0 * s);
         let (pill_h, pad_x) = (22.0 * s, 8.0 * s);
+        let (pref, second) = units(self.unit_display);
         for (high, color) in self.target_colors() {
+            let ink = self.theme.background;
+            let faint = blend_pixel(color, Rgba([ink[0], ink[1], ink[2], 170]));
             for (from, to, v) in self.target_stretches(high) {
-                let text = fmt_glucose(v, unit_preference(self.unit_display));
-                let pill_w = text_w(font, &text, size) + 2.0 * pad_x;
+                let text = fmt_glucose(v, pref);
                 let (x0, x1) = (plot.x(from), plot.x(to));
-                if x1 - x0 < pill_w + 12.0 * s {
+                let fits = |pill_w: f32| x1 - x0 >= pill_w + 12.0 * s;
+                let text_w_px = text_w(font, &text, size);
+                let also = second
+                    .map(|u| format!(" {}", fmt_glucose(v, u)))
+                    .filter(|t| fits(text_w_px + text_w(font, t, size_second) + 2.0 * pad_x))
+                    .unwrap_or_default();
+                let pill_w = text_w_px + text_w(font, &also, size_second) + 2.0 * pad_x;
+                if !fits(pill_w) {
                     continue;
                 }
                 let (px, py) = (x0 + 6.0 * s, plot.y(v) - pill_h / 2.0);
@@ -520,14 +533,12 @@ impl<'a> CompareGraphBuilder<'a> {
                     (pill_h / 2.0) as i32,
                     color,
                 );
-                draw_text(
+                draw_text_runs(
                     img,
-                    self.theme.background,
-                    (px + pad_x) as i32,
-                    (py + (pill_h - size) / 2.0 - 1.0 * s) as i32,
-                    PxScale::from(size),
                     font,
-                    &text,
+                    px + pad_x,
+                    (py + (pill_h - size) / 2.0 - 1.0 * s).floor(),
+                    &[(&text, size, ink), (&also, size_second, faint)],
                 );
             }
         }
@@ -792,7 +803,8 @@ impl<'a> CompareGraphBuilder<'a> {
     }
 
     /// Average glucose, GMI, SD and CV in a row, over a divider. With
-    /// `before`, each value gets a chip with its change from it.
+    /// `before`, each value gets a chip with its change from it. With two
+    /// units, glucose values and changes are repeated in the second one.
     fn draw_stats(
         &self,
         img: &mut RgbaImage,
@@ -802,7 +814,7 @@ impl<'a> CompareGraphBuilder<'a> {
         before: Option<&TirStats>,
     ) {
         let s = card.s;
-        let pref = unit_preference(self.unit_display);
+        let (pref, second) = units(self.unit_display);
         let (size_label, size_value, size_unit) = (19.0 * s, 44.0 * s, 19.0 * s);
         let x = card.x + card.pad;
         let width = card.w - 2.0 * card.pad;
@@ -838,18 +850,27 @@ impl<'a> CompareGraphBuilder<'a> {
             stat("SD", stats.sd_mgdl, before.map(|b| b.sd_mgdl), true),
             stat("CV", stats.cv_percent, before.map(|b| b.cv_percent), false),
         ];
-        let column = width / items.len() as f32;
-        for (k, item) in items.into_iter().enumerate() {
-            let fmt = |v: f32| {
+        // Glucose columns are wider than percentage ones: their unit is
+        // longer, and "10.2 mmol/L" has to fit.
+        let share = |glucose: bool| if glucose { 1.15 } else { 0.85 };
+        let column = width / items.iter().map(|i| share(i.glucose)).sum::<f32>();
+        let mut cx = x;
+        for item in items {
+            let fmt = |v: f32, unit: UnitPreference| {
                 if item.glucose {
-                    fmt_glucose(v, pref)
+                    fmt_glucose(v, unit)
                 } else {
                     format!("{v:.1}")
                 }
             };
             let (label, value, was) = (item.label, item.value, item.before);
             let unit = if item.glucose { unit_name(pref) } else { "%" };
-            let cx = x + k as f32 * column;
+            // Compares what is shown, so the change matches the numbers.
+            let change = |unit: UnitPreference| {
+                let now = fmt(value, unit);
+                was.map(|was| signed(parse(&now) - parse(&fmt(was, unit)), &now))
+            };
+            let second = second.filter(|_| item.glucose);
             let top = card.stats_top;
             draw_text(
                 img,
@@ -860,7 +881,7 @@ impl<'a> CompareGraphBuilder<'a> {
                 font,
                 label,
             );
-            let value_text = fmt(value);
+            let value_text = fmt(value, pref);
             let value_top = top + size_label + 8.0 * s;
             draw_text(
                 img,
@@ -882,13 +903,27 @@ impl<'a> CompareGraphBuilder<'a> {
                 unit,
             );
 
-            if let Some(was) = was {
-                // Compare what is shown, so the chip matches the numbers.
-                let delta = parse(&value_text) - parse(&fmt(was));
-                let text = signed(delta, &value_text);
+            // The second unit's line pushes every column's chip down, so
+            // they stay level.
+            let mut chip_top = value_top + size_value + 8.0 * s;
+            if self.is_dual() {
+                chip_top += size_unit + 2.0 * s;
+            }
+            if let Some(unit) = second {
+                draw_text(
+                    img,
+                    self.theme.text_dim,
+                    cx as i32,
+                    (value_top + size_value + 2.0 * s) as i32,
+                    PxScale::from(size_unit),
+                    font,
+                    &fmt_glucose_unit(value, unit),
+                );
+            }
+
+            if let Some(text) = change(pref) {
                 let chip_h = 26.0 * s;
                 let tw = text_w(font, &text, size_unit);
-                let chip_top = value_top + size_value + 8.0 * s;
                 let c = self.theme.text_secondary;
                 draw_filled_rounded_rect(
                     img,
@@ -908,7 +943,19 @@ impl<'a> CompareGraphBuilder<'a> {
                     font,
                     &text,
                 );
+                if let Some(text) = second.and_then(change) {
+                    draw_text(
+                        img,
+                        self.theme.text_dim,
+                        (cx + tw + 26.0 * s) as i32,
+                        (chip_top + (chip_h - size_unit) / 2.0 - 1.0 * s) as i32,
+                        PxScale::from(size_unit),
+                        font,
+                        &text,
+                    );
+                }
             }
+            cx += column * share(item.glucose);
         }
     }
 }

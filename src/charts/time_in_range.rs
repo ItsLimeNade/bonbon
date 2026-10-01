@@ -3,11 +3,10 @@ use image::{Rgba, RgbaImage};
 
 use crate::models::{GraphEntry, UnitDisplay, UnitPreference};
 use crate::theme::Theme;
+use crate::utils::axis::{fmt_glucose, fmt_glucose_unit, units};
 use crate::utils::color::darken_color;
 use crate::utils::drawing::{card_canvas, draw_fast_rect, draw_filled_rounded_rect};
 use crate::utils::text::{draw_text as draw_text_mut, text_w};
-
-const MGDL_PER_MMOL: f32 = 18.0182;
 
 /// A glycemic band, ordered from lowest to highest glucose.
 ///
@@ -242,8 +241,9 @@ impl<'a> TimeInRangeBuilder<'a> {
         self
     }
 
-    /// Unit used for displayed values (average, SD, target range).
-    /// `Dual` falls back to its primary unit. Default: mg/dL.
+    /// Unit used for displayed values (average, SD, target range). `Dual`
+    /// repeats them in the other unit on a smaller line underneath.
+    /// Default: mg/dL.
     pub fn with_units(mut self, unit: UnitDisplay) -> Self {
         self.unit_display = unit;
         self
@@ -321,7 +321,14 @@ impl<'a> TimeInRangeBuilder<'a> {
 
         let bands = display_bands(&stats, self.include_extremes);
 
-        let content_bottom = if self.show_footer { 296.0 } else { 360.0 };
+        // The footer starts higher with two units, for its second line.
+        let (_, second_unit) = units(self.unit_display);
+        let divider_y = if second_unit.is_some() { 304.0 } else { 314.0 };
+        let content_bottom = if self.show_footer {
+            divider_y - 18.0
+        } else {
+            360.0
+        };
         draw_bar(&mut img, &self.theme, &bands, s, content_bottom);
         draw_band_rows(&mut img, &self.theme, &font, &bands, s, content_bottom);
         if self.show_footer {
@@ -332,6 +339,7 @@ impl<'a> TimeInRangeBuilder<'a> {
                 &stats,
                 &self.thresholds,
                 self.unit_display,
+                divider_y * s,
                 s,
             );
         }
@@ -623,6 +631,9 @@ fn draw_band_rows(
     }
 }
 
+/// The statistics under the divider at `divider_y`. Glucose values are in
+/// the primary unit, with the second unit's on a smaller line underneath.
+#[allow(clippy::too_many_arguments)]
 fn draw_footer(
     img: &mut RgbaImage,
     theme: &Theme,
@@ -630,15 +641,16 @@ fn draw_footer(
     stats: &TirStats,
     thresholds: &TirThresholds,
     unit: UnitDisplay,
+    divider_y: f32,
     s: f32,
 ) {
     let pad = 24.0 * s;
     let w = img.width() as f32;
-    let divider_y = 314.0 * s;
-    let label_y = 330.0 * s;
-    let value_y = 348.0 * s;
+    let label_y = divider_y + 16.0 * s;
+    let value_y = divider_y + 34.0 * s;
     let font_label = 12.0 * s;
     let font_value = 21.0 * s;
+    let font_second = 13.0 * s;
 
     draw_fast_rect(
         img,
@@ -649,24 +661,26 @@ fn draw_footer(
         theme.grid_major,
     );
 
-    let pref = unit_preference(unit);
-    let blocks: [(&str, String); 5] = [
-        ("AVG", fmt_glucose(stats.mean_mgdl, pref, true)),
-        ("SD", fmt_glucose(stats.sd_mgdl, pref, false)),
-        ("CV", format!("{:.1}%", stats.cv_percent)),
-        ("GMI", format!("{:.1}%", stats.gmi_percent)),
-        (
-            "TARGET",
-            format!(
-                "{}-{}",
-                fmt_glucose(thresholds.low, pref, false),
-                fmt_glucose(thresholds.high, pref, false)
-            ),
-        ),
+    let (pref, second) = units(unit);
+    let target = |u: UnitPreference| {
+        format!(
+            "{}-{}",
+            fmt_glucose(thresholds.low, u),
+            fmt_glucose(thresholds.high, u)
+        )
+    };
+    // A glucose value, written in each displayed unit.
+    let glucose = |write: &dyn Fn(UnitPreference) -> String| (write(pref), second.map(write));
+    let blocks: [(&str, (String, Option<String>)); 5] = [
+        ("AVG", glucose(&|u| fmt_glucose_unit(stats.mean_mgdl, u))),
+        ("SD", glucose(&|u| fmt_glucose(stats.sd_mgdl, u))),
+        ("CV", (format!("{:.1}%", stats.cv_percent), None)),
+        ("GMI", (format!("{:.1}%", stats.gmi_percent), None)),
+        ("TARGET", glucose(&target)),
     ];
 
     let block_w = (w - 2.0 * pad) / blocks.len() as f32;
-    for (i, (label, value)) in blocks.iter().enumerate() {
+    for (i, (label, (value, second))) in blocks.iter().enumerate() {
         let x = (pad + i as f32 * block_w) as i32;
         draw_text_mut(
             img,
@@ -686,25 +700,17 @@ fn draw_footer(
             font,
             value,
         );
-    }
-}
-
-fn unit_preference(unit: UnitDisplay) -> UnitPreference {
-    match unit {
-        UnitDisplay::MgDl => UnitPreference::MgDl,
-        UnitDisplay::MmolL => UnitPreference::MmolL,
-        UnitDisplay::Dual { primary } => primary,
-    }
-}
-
-/// Formats a mg/dL value in the preferred unit, optionally with the unit
-/// label appended.
-fn fmt_glucose(mgdl: f32, pref: UnitPreference, with_unit: bool) -> String {
-    match (pref, with_unit) {
-        (UnitPreference::MgDl, true) => format!("{mgdl:.0} mg/dl"),
-        (UnitPreference::MgDl, false) => format!("{mgdl:.0}"),
-        (UnitPreference::MmolL, true) => format!("{:.1} mmol/L", mgdl / MGDL_PER_MMOL),
-        (UnitPreference::MmolL, false) => format!("{:.1}", mgdl / MGDL_PER_MMOL),
+        if let Some(second) = second {
+            draw_text_mut(
+                img,
+                theme.text_dim,
+                x,
+                (value_y + font_value + 3.0 * s) as i32,
+                PxScale::from(font_second),
+                font,
+                second,
+            );
+        }
     }
 }
 
