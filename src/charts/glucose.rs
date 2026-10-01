@@ -29,12 +29,25 @@ const PANEL_PAD: f32 = 16.0;
 /// gets hard to read.
 const MAX_VALUE_TICKS: usize = 7;
 
+/// Fewest labelled values on the glucose Y axis, as long as their labels fit
+/// without touching. A short plot (one sharing the canvas with mini graphs)
+/// would otherwise drop to two or three lines, too few to read values off.
+const MIN_VALUE_TICKS: usize = 4;
+
+/// Space (before scaling) between two neighbouring Y-axis labels: what they
+/// normally get, and the least they are squeezed to when that is what it
+/// takes to reach [`MIN_VALUE_TICKS`].
+const VALUE_LABEL_GAP: f32 = 31.0;
+const VALUE_LABEL_MIN_GAP: f32 = 6.0;
+
 /// Steps between labelled values on the glucose Y axis, finest first. 30 sits
 /// between 20 and 50 so a typical day gets 5 or 6 lines rather than 9 or 4.
 const MGDL_STEPS: [f32; 11] = [
     1.0, 2.0, 5.0, 10.0, 20.0, 30.0, 50.0, 100.0, 200.0, 500.0, 1000.0,
 ];
-const MMOL_STEPS: [f32; 9] = [0.1, 0.2, 0.5, 1.0, 2.0, 5.0, 10.0, 20.0, 50.0];
+/// Likewise 3 between 2 and 5: a tall range (a peak around 17 mmol/L) is too
+/// many lines every 2 and only three every 5.
+const MMOL_STEPS: [f32; 10] = [0.1, 0.2, 0.5, 1.0, 2.0, 3.0, 5.0, 10.0, 20.0, 50.0];
 /// Share of the plot height each mini graph takes from the glucose plot.
 const LANE_SHARE: f32 = 0.1;
 
@@ -172,6 +185,7 @@ impl MiniGraph {
                 name: "IOB",
                 color: theme.insulin,
                 floor: 1.0,
+                negligible: 0.0,
                 format: |v| format!("{:.1}u", v),
                 amount: |t| t.insulin,
                 marker: Marker::Triangle,
@@ -181,6 +195,7 @@ impl MiniGraph {
                 name: "COB",
                 color: theme.carbs,
                 floor: 10.0,
+                negligible: 1.0,
                 format: |v| format!("{:.0}g", v),
                 amount: |t| t.carbs,
                 marker: Marker::Dot,
@@ -198,6 +213,9 @@ struct MiniGraphStyle {
     /// Lowest top of scale, so a few small doses or snacks don't fill the
     /// graph.
     floor: f32,
+    /// Values under this (in size) are drawn as zero: less than a gram of
+    /// carbs is the tail of an absorption model, not something on board.
+    negligible: f32,
     /// Formats a value with its unit.
     format: fn(f32) -> String,
     /// The amount of a treatment this graph marks, if any.
@@ -1120,7 +1138,9 @@ impl<'a> GlucoseGraphBuilder<'a> {
     /// The values (in mg/dL) that get a gridline and a label on the Y axis:
     /// every multiple of a round step inside `[y_min, y_max]`, e.g. 30 mg/dL or
     /// 2 mmol/L depending on the primary unit. The step is the finest that
-    /// keeps the labels well apart without crowding the axis.
+    /// keeps the labels well apart without crowding the axis. When that
+    /// leaves fewer than [`MIN_VALUE_TICKS`], the labels are allowed closer
+    /// together (never touching) to reach it.
     fn value_ticks(&self, viewport: &GraphViewport, y_min: f32, y_max: f32) -> Vec<f32> {
         // mg/dL per primary unit, and that unit's steps.
         let (per_unit, steps): (f32, &[f32]) = match self.unit_display {
@@ -1134,24 +1154,31 @@ impl<'a> GlucoseGraphBuilder<'a> {
             } => (18.0, &MMOL_STEPS),
         };
         // A label is 31px tall before scaling, 52px with the converted value
-        // under it in dual mode; keep at least a label's height between
+        // under it in dual mode; keep about a label's height between
         // neighbours.
-        let min_gap = match self.unit_display {
-            UnitDisplay::Dual { .. } => 52.0 + 31.0,
-            _ => 31.0 + 31.0,
-        } * viewport.s;
+        let label_height = match self.unit_display {
+            UnitDisplay::Dual { .. } => 52.0,
+            _ => 31.0,
+        };
         let px_per_unit = viewport.plot_h / (y_max - y_min) * per_unit;
+        let min_step = |gap: f32| (label_height + gap) * viewport.s / px_per_unit;
+        let (lo, hi) = (y_min / per_unit, y_max / per_unit);
 
-        round_ticks(
-            y_min / per_unit,
-            y_max / per_unit,
-            steps,
-            min_gap / px_per_unit,
-            MAX_VALUE_TICKS,
-        )
-        .into_iter()
-        .map(|v| v * per_unit)
-        .collect()
+        let mut ticks = round_ticks(lo, hi, steps, min_step(VALUE_LABEL_GAP), MAX_VALUE_TICKS);
+        if ticks.len() < MIN_VALUE_TICKS {
+            if let Some(fuller) = fuller_ticks(
+                lo,
+                hi,
+                steps,
+                min_step(VALUE_LABEL_MIN_GAP),
+                MIN_VALUE_TICKS,
+                MAX_VALUE_TICKS,
+            ) {
+                ticks = fuller;
+            }
+        }
+
+        ticks.into_iter().map(|v| v * per_unit).collect()
     }
 
     /// The label of the Y-axis tick at `val` mg/dL, in the primary unit, and
@@ -1220,7 +1247,9 @@ impl<'a> GlucoseGraphBuilder<'a> {
 
                 let ins_base_max = (22.0 * 2.0 / 3.0) * ctx.viewport.s;
                 let ins_base_min = (6.0 * 5.0 / 3.0) * ctx.viewport.s;
-                let ins_micro_size = 3.5 * ctx.viewport.s;
+                // Small next to a bolus (10 and up), but big enough to be
+                // seen on a full day's graph.
+                let ins_micro_size = 7.0 * ctx.viewport.s;
 
                 let carb_base_max = (25.0 * 2.0 / 3.0) * ctx.viewport.s;
                 let carb_base_min = (8.0 * 5.0 / 3.0) * ctx.viewport.s;
@@ -1374,13 +1403,19 @@ impl<'a> GlucoseGraphBuilder<'a> {
                         if ins <= self.microbolus_threshold && t.carbs.is_none() {
                             is_micro = true;
                             let x = ctx.project_x(t.date);
-                            let tick_height = 8.0 * ctx.viewport.s;
-                            draw_line_segment_mut(
-                                img,
-                                (x, ctx.viewport.plot_bottom),
-                                (x, ctx.viewport.plot_bottom - tick_height),
-                                self.theme.insulin,
-                            );
+                            let tick_height = 14.0 * ctx.viewport.s;
+                            // A hairline is lost on a large canvas: give the
+                            // tick some width.
+                            let half_width = (1.5 * ctx.viewport.s).round().max(1.0) as i32;
+                            for dx in -half_width..=half_width {
+                                let x = x + dx as f32;
+                                draw_line_segment_mut(
+                                    img,
+                                    (x, ctx.viewport.plot_bottom),
+                                    (x, ctx.viewport.plot_bottom - tick_height),
+                                    self.theme.insulin,
+                                );
+                            }
                         }
                     }
                     if !is_micro {
@@ -1540,11 +1575,12 @@ impl<'a> GlucoseGraphBuilder<'a> {
                 .collect()
         };
 
+        let style = graph.style(&self.theme);
         let (MiniGraph::Iob(source) | MiniGraph::Cob(source)) = graph;
-        match source {
+        let values: Vec<Option<f32>> = match source {
             OnBoard::Reported(points) => interpolate_samples(points, &times),
             OnBoard::FromTreatments(duration) => {
-                let amount = graph.style(&self.theme).amount;
+                let amount = style.amount;
                 let doses: Vec<(chrono::DateTime<Utc>, f32)> = self
                     .treatments
                     .iter()
@@ -1552,7 +1588,8 @@ impl<'a> GlucoseGraphBuilder<'a> {
                     .collect();
                 up_to_now(linear_on_board(doses, *duration, &times))
             }
-        }
+        };
+        drop_negligible(values, style.negligible)
     }
 
     /// Draws one mini graph in its lane: a line over a soft gradient area
@@ -1775,7 +1812,7 @@ impl<'a> GlucoseGraphBuilder<'a> {
                 // Square-root scaling keeps similar amounts similar in size
                 // while a small correction still reads as small.
                 let size = if micro {
-                    2.5 * s
+                    3.5 * s
                 } else {
                     (4.5 + 3.5 * (v / largest).sqrt()) * s
                 };
@@ -1963,6 +2000,39 @@ fn round_ticks(lo: f32, hi: f32, steps: &[f32], min_step: f32, max_ticks: usize)
                 .then(|| (first..=last).map(|k| k as f32 * step).collect())
         })
         .unwrap_or_default()
+}
+
+/// Flattens values smaller than `negligible` to zero, leaving gaps as gaps.
+fn drop_negligible(values: Vec<Option<f32>>, negligible: f32) -> Vec<Option<f32>> {
+    values
+        .into_iter()
+        .map(|v| v.map(|v| if v.abs() < negligible { 0.0 } else { v }))
+        .collect()
+}
+
+/// Like [`round_ticks`], for a range it left too bare: the multiples of the
+/// coarsest of `steps` that is at least `min_step` and gives between
+/// `min_ticks` and `max_ticks` of them. `None` when no step does.
+fn fuller_ticks(
+    lo: f32,
+    hi: f32,
+    steps: &[f32],
+    min_step: f32,
+    min_ticks: usize,
+    max_ticks: usize,
+) -> Option<Vec<f32>> {
+    steps
+        .iter()
+        .rev()
+        .copied()
+        .filter(|&step| step >= min_step)
+        .find_map(|step| {
+            let first = (lo / step - 1e-3).ceil() as i64;
+            let last = (hi / step + 1e-3).floor() as i64;
+            let count = last - first + 1;
+            (count >= min_ticks as i64 && count <= max_ticks as i64)
+                .then(|| (first..=last).map(|k| k as f32 * step).collect())
+        })
 }
 
 /// `(min, max)` of `values`, or `(f32::MAX, f32::MIN)` when empty.
@@ -2308,6 +2378,59 @@ mod tests {
         assert_eq!(mg, every(50.0, 2..=3));
         let mg = round_ticks(50.0, 150.0, &MGDL_STEPS, 40.0, 10);
         assert_eq!(mg, every(50.0, 1..=3));
+    }
+
+    #[test]
+    fn fuller_ticks_take_the_coarsest_step_that_reaches_the_minimum() {
+        // Every 100 gives three lines; every 50 is the coarsest with four.
+        let ticks = fuller_ticks(60.0, 320.0, &MGDL_STEPS, 40.0, 4, 7);
+        assert_eq!(ticks, Some(vec![100.0, 150.0, 200.0, 250.0, 300.0]));
+        // Not finer than the labels allow.
+        assert_eq!(fuller_ticks(60.0, 320.0, &MGDL_STEPS, 60.0, 4, 7), None);
+        // Nor more lines than the cap.
+        assert_eq!(fuller_ticks(0.0, 1000.0, &[100.0], 1.0, 4, 7), None);
+    }
+
+    #[test]
+    fn a_plot_squeezed_by_mini_graphs_keeps_four_lines() {
+        for primary in [UnitPreference::MgDl, UnitPreference::MmolL] {
+            for mini_graphs in 0..=2 {
+                let mut builder = graph()
+                    .with_units(UnitDisplay::Dual { primary })
+                    .with_layout(LayoutConfig {
+                        width: 2550,
+                        height: 1650,
+                        ..Default::default()
+                    });
+                if mini_graphs >= 1 {
+                    builder = builder.add_mini_graph(MiniGraph::iob(Duration::hours(4)));
+                }
+                if mini_graphs >= 2 {
+                    builder = builder.add_mini_graph(MiniGraph::cob(Duration::hours(3)));
+                }
+                let vp = builder.calculate_viewport();
+                for y_min in [40.0, 50.0, 60.0] {
+                    for top in (200..=420).step_by(10) {
+                        let ticks = builder.value_ticks(&vp, y_min, top as f32);
+                        assert!(
+                            (MIN_VALUE_TICKS..=MAX_VALUE_TICKS).contains(&ticks.len()),
+                            "{primary:?}, {mini_graphs} mini graphs, {y_min}..{top}: {ticks:?}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn negligible_values_read_as_zero() {
+        let values = vec![Some(12.0), Some(0.99), Some(1.0), Some(-0.4), None];
+        assert_eq!(
+            drop_negligible(values.clone(), 1.0),
+            vec![Some(12.0), Some(0.0), Some(1.0), Some(0.0), None]
+        );
+        // IOB keeps everything, negative values included.
+        assert_eq!(drop_negligible(values.clone(), 0.0), values);
     }
 
     #[test]
