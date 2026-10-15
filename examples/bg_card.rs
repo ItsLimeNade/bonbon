@@ -9,7 +9,7 @@ use image::{ExtendedColorType, ImageEncoder};
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let now = Utc::now();
 
-    // Build a 3-hour sparkline from sine-wave data (oldest → newest)
+    // The last 3 hours as sine-wave readings (oldest → newest)
     let point_count = 36;
     let sparkline_points: Vec<SparklinePoint> = (0..point_count)
         .map(|i| {
@@ -46,6 +46,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let img = BgCardBuilder::new()
         .with_data(data)
+        .with_targets(70.0, 180.0)
         .with_theme(Theme::dark())
         .with_scale(1.0) // use 4.0 for a 2560×1280 high-res output
         .build()?;
