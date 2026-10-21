@@ -23,7 +23,7 @@ Bonbon is a fast, customizable graph rendering library designed for diabetes rel
 - **Timezone Support**: Accurate time axis labels for any timezone
 - **Microbolus Filtering**: Configurable threshold to simplify SMB visualization
 - **Mini Graphs**: Optional insulin and carbs on board graphs under the glucose graph, from your treatments faded over a duration you set, or from your AID system's reported values
-- **BG Card**: Compact status card showing current glucose, trend, delta, IOB/COB, and a 3 hour sparkline
+- **BG Card**: Compact status card showing current glucose, trend, delta, IOB/COB, and the last 3 hours against your target range
 - **Percentile Graph**: A typical day summarized from any number of days: the median with 25–75% and 5–95% bands (an Ambulatory Glucose Profile), colored by glucose status
 - **Breakdown Graph**: Time in range for each hour of the day or each day of the week, with the change from the previous period
 - **Compare Graph**: Two periods side by side, each with its typical day and average, GMI, SD and CV, plus the change between them
@@ -74,7 +74,9 @@ let graph = GlucoseGraphBuilder::new()
 
 ## BG Card
 
-The BG Card is a compact 640×320 status card (scalable via `with_scale`) that renders current glucose, trend arrow, delta, age, IOB/COB, and a color-coded 3-hour sparkline with an ambient gradient fill. The current value and delta are given in mg/dL and shown in the unit set with `with_units`.
+The BG Card is a compact, flat 640×320 status card (scalable via `with_scale`) in two halves. On the left, the current glucose as large as it fits with its trend arrow, change and data age, an optional info pill above it, and insulin and carbs on board as two chips. On the right, the last 3 hours: one capsule per quarter hour from its lowest to its highest reading, on a fixed scale over the target range, with the latest reading as a dot of its own and a headline saying how long the current status has lasted. The very low and very high lines only appear once a reading has crossed them. Values are given in mg/dL and shown in the unit set with `with_units`; the target range is set with `with_targets` (70–180 by default).
+
+The card is set in the bundled Geist Mono unless you pass your own font with `with_font`, and optionally a separate one for numbers with `with_number_font`. A variable font is set in the weights the card asks for.
 
 <p align="center">
   <img src="assets/images/example_in_range_card.png" alt="BG Card - In Range" width="640">

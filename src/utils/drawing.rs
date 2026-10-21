@@ -497,6 +497,7 @@ pub(crate) fn card_canvas(
 /// Alpha-blends `src` onto `img` with its top-left corner at (`x`, `y`),
 /// scaling every source alpha by `alpha_scale` (`1.0` for a plain blit).
 /// Destination alpha is left untouched.
+#[cfg(feature = "beetroot")]
 pub(crate) fn blend_image(img: &mut RgbaImage, src: &RgbaImage, x: i32, y: i32, alpha_scale: f32) {
     let (img_w, img_h) = (img.width() as i32, img.height() as i32);
     let (src_w, src_h) = (src.width() as i32, src.height() as i32);
